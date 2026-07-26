@@ -21,9 +21,7 @@ class TromboneService:
             maxsize=settings.input_queue_size
         )
         self.processor_registry = ProcessorRegistry(settings)
-        self.processor: AudioProcessor = self.processor_registry.create(
-            settings.processor
-        )
+        self.processor: AudioProcessor = self.processor_registry.create(settings.processor)
         self.transport: asyncio.DatagramTransport | None = None
         self.protocol: UdpIngressProtocol | None = None
         self.worker_task: asyncio.Task[None] | None = None
@@ -33,7 +31,6 @@ class TromboneService:
     async def start(self) -> None:
         if self._running:
             return
-
         await self.processor.start()
         loop = asyncio.get_running_loop()
         transport, protocol = await loop.create_datagram_endpoint(
@@ -47,8 +44,7 @@ class TromboneService:
         self.transport = transport  # type: ignore[assignment]
         self.protocol = protocol  # type: ignore[assignment]
         self.worker_task = asyncio.create_task(
-            self._processing_loop(),
-            name="audio-processing-loop",
+            self._processing_loop(), name="audio-processing-loop"
         )
         self._running = True
         logger.info(
@@ -63,7 +59,6 @@ class TromboneService:
     async def stop(self) -> None:
         if not self._running:
             return
-
         if self.worker_task is not None:
             self.worker_task.cancel()
             try:
@@ -71,28 +66,23 @@ class TromboneService:
             except asyncio.CancelledError:
                 pass
             self.worker_task = None
-
         async with self._processor_lock:
             await self._flush_processor()
             await self.processor.stop()
-
         if self.transport is not None:
             self.transport.close()
             self.transport = None
-
         self._running = False
         logger.info("Karaoke Anything stopped")
 
     async def select_processor(self, name: str) -> None:
         replacement = self.processor_registry.create(name)
         await replacement.start()
-
         async with self._processor_lock:
             old = self.processor
             await self._flush_processor()
             self.processor = replacement
             await old.stop()
-
         self.settings = replace(self.settings, processor=name)
         logger.info("Processor changed from %s to %s", old.name, replacement.name)
 
@@ -111,6 +101,9 @@ class TromboneService:
                 "shifts": self.settings.demucs_shifts,
                 "vocal_reduction": self.settings.demucs_vocal_reduction,
             },
+            "centre_reduction": {
+                "reduction": self.settings.centre_reduction,
+            },
             "startup_defaults": {
                 "processor": self.startup_settings.processor,
                 "demucs": {
@@ -120,6 +113,9 @@ class TromboneService:
                     "overlap": self.startup_settings.demucs_overlap,
                     "shifts": self.startup_settings.demucs_shifts,
                     "vocal_reduction": self.startup_settings.demucs_vocal_reduction,
+                },
+                "centre_reduction": {
+                    "reduction": self.startup_settings.centre_reduction,
                 },
             },
         }
@@ -133,6 +129,7 @@ class TromboneService:
             "demucs_overlap",
             "demucs_shifts",
             "demucs_vocal_reduction",
+            "centre_reduction",
         }
         unknown = set(updates) - allowed
         if unknown:
@@ -141,24 +138,27 @@ class TromboneService:
         candidate = replace(self.settings, **updates)
         self._validate_runtime_settings(candidate)
 
-        only_live_vocal_change = (
-            set(updates) == {"demucs_vocal_reduction"}
-            and self.processor.name == "htdemucs-vocals"
-            and hasattr(self.processor, "vocal_reduction")
-        )
-        if only_live_vocal_change:
-            self.processor.vocal_reduction = candidate.demucs_vocal_reduction  # type: ignore[attr-defined]
+        if self._can_apply_live(updates):
+            if "demucs_vocal_reduction" in updates:
+                self.processor.vocal_reduction = candidate.demucs_vocal_reduction  # type: ignore[attr-defined]
+                applies_from = "next segment"
+                logger.info(
+                    "Updated live vocal reduction to %.2f",
+                    candidate.demucs_vocal_reduction,
+                )
+            else:
+                self.processor.centre_reduction = candidate.centre_reduction  # type: ignore[attr-defined]
+                applies_from = "next packet"
+                logger.info(
+                    "Updated live centre reduction to %.2f",
+                    candidate.centre_reduction,
+                )
             self.settings = candidate
-            logger.info(
-                "Updated live vocal reduction to %.2f",
-                candidate.demucs_vocal_reduction,
-            )
-            return {"processor_restarted": False, "applies_from": "next segment"}
+            return {"processor_restarted": False, "applies_from": applies_from}
 
         registry = ProcessorRegistry(candidate)
         replacement = registry.create(candidate.processor)
         await replacement.start()
-
         async with self._processor_lock:
             old = self.processor
             await self._flush_processor()
@@ -166,9 +166,20 @@ class TromboneService:
             self.processor_registry = registry
             self.settings = candidate
             await old.stop()
-
         logger.info("Runtime settings applied; processor reinitialised")
         return {"processor_restarted": True, "applies_from": "immediately"}
+
+    def _can_apply_live(self, updates: dict[str, object]) -> bool:
+        keys = set(updates)
+        return (
+            keys == {"demucs_vocal_reduction"}
+            and self.processor.name == "htdemucs-vocals"
+            and hasattr(self.processor, "vocal_reduction")
+        ) or (
+            keys == {"centre_reduction"}
+            and self.processor.name == "stereo-centre-reduction"
+            and hasattr(self.processor, "centre_reduction")
+        )
 
     async def restore_startup_settings(self) -> dict[str, object]:
         startup = asdict(self.startup_settings)
@@ -182,6 +193,7 @@ class TromboneService:
                 "demucs_overlap",
                 "demucs_shifts",
                 "demucs_vocal_reduction",
+                "centre_reduction",
             )
         }
         return await self.update_runtime_settings(updates)
@@ -200,6 +212,8 @@ class TromboneService:
             raise ValueError("shifts must be zero or greater")
         if not 0 <= settings.demucs_vocal_reduction <= 1:
             raise ValueError("vocal_reduction must be between 0.0 and 1.0")
+        if not 0 <= settings.centre_reduction <= 1:
+            raise ValueError("centre_reduction must be between 0.0 and 1.0")
 
     async def _processing_loop(self) -> None:
         while True:
@@ -228,14 +242,12 @@ class TromboneService:
             self.metrics.forwarding_errors += 1
             logger.error("Cannot forward packet: UDP transport is unavailable")
             return
-
         destination_host = (
             output.destination_host
             or self.settings.return_host
             or source_packet.sender_host
         )
         destination_port = output.destination_port or self.settings.output_port
-
         try:
             self.transport.sendto(output.payload, (destination_host, destination_port))
             self.metrics.packets_forwarded += 1
@@ -254,7 +266,6 @@ class TromboneService:
             if sender_host is None:
                 logger.warning("Discarding flushed packet because no destination is known")
                 continue
-
             synthetic_source = MediaPacket(
                 payload=b"",
                 sender_host=sender_host,
@@ -275,7 +286,6 @@ class TromboneService:
         last_packet_age_ms = None
         if self.metrics.last_packet_at is not None:
             last_packet_age_ms = round((now - self.metrics.last_packet_at) * 1000, 1)
-
         capabilities = self.processor.capabilities
         return {
             "status": "ok" if self._running else "starting",
@@ -318,7 +328,6 @@ class TromboneService:
         last_packet_age = -1.0
         if self.metrics.last_packet_at is not None:
             last_packet_age = now - self.metrics.last_packet_at
-
         values = {
             "karaoke_anything_uptime_seconds": now - self.metrics.started_at,
             "karaoke_anything_queue_size": self.input_queue.qsize(),
@@ -336,7 +345,6 @@ class TromboneService:
             "karaoke_anything_forwarding_errors_total": self.metrics.forwarding_errors,
             "karaoke_anything_last_packet_age_seconds": last_packet_age,
         }
-
         lines = []
         for name, value in values.items():
             lines.append(f"# TYPE {name} gauge")
