@@ -7,8 +7,9 @@
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; }
     body { margin: 0; background: #151515; color: #f5f5f5; }
-    main { max-width: 720px; margin: 0 auto; padding: 24px; }
+    main { max-width: 760px; margin: 0 auto; padding: 24px; }
     h1 { margin-bottom: 4px; }
+    h2 { margin-bottom: 6px; }
     .muted { color: #aaa; }
     .card { background: #232323; border: 1px solid #383838; border-radius: 12px; padding: 18px; margin: 18px 0; }
     label { display: block; margin: 14px 0 6px; font-weight: 600; }
@@ -23,8 +24,10 @@
     #message { min-height: 24px; margin-top: 12px; }
     dl { display: grid; grid-template-columns: 180px 1fr; gap: 8px; }
     dt { color: #aaa; }
-    dd { margin: 0; }
+    dd { margin: 0; overflow-wrap: anywhere; }
     .group { border-top: 1px solid #3a3a3a; margin-top: 18px; padding-top: 4px; }
+    .group[hidden] { display: none; }
+    .startup { font-size: 0.9rem; color: #aaa; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -35,13 +38,16 @@
   <section class="card">
     <label for="processor">Processor</label>
     <select id="processor">
+      <option value="convtasnet-lyrics-causal">ConvTasNet lyrics causal</option>
       <option value="htdemucs-vocals">HTDemucs vocals</option>
       <option value="stereo-centre-reduction">Stereo centre reduction</option>
       <option value="passthrough">Passthrough</option>
+      <option value="delay-passthrough">Delay passthrough</option>
       <option value="null">Silence</option>
     </select>
+    <div class="startup" id="startupProcessor">Startup default: -</div>
 
-    <div class="group">
+    <div class="group" id="centreGroup">
       <h2>Centre reduction</h2>
       <div class="muted">Zero-lookahead mid/side processing. Changes apply from the next audio packet.</div>
       <label for="centreReduction">Centre reduction</label>
@@ -51,10 +57,14 @@
       </div>
     </div>
 
-    <div class="group">
-      <h2>Demucs</h2>
+    <div class="group" id="demucsGroup">
+      <h2>HTDemucs</h2>
+      <div class="muted">Buffered separator. Most changes restart and reload the processor.</div>
       <label for="model">Demucs model</label>
       <input id="model" type="text">
+
+      <label for="demucsDevice">Device</label>
+      <input id="demucsDevice" type="text" placeholder="auto, cpu, cuda">
 
       <label for="vocalReduction">Vocal reduction</label>
       <div class="range-row">
@@ -72,6 +82,32 @@
       <input id="shifts" type="number" min="0" step="1">
     </div>
 
+    <div class="group" id="convtasnetGroup">
+      <h2>ConvTasNet lyrics causal</h2>
+      <div class="muted">Causal 44.1 kHz lyrics/accompaniment model. This implementation processes finite buffered segments.</div>
+
+      <label for="convtasnetModelPath">Model path</label>
+      <input id="convtasnetModelPath" type="text">
+
+      <label for="convtasnetDevice">Device</label>
+      <input id="convtasnetDevice" type="text" placeholder="auto, cpu, cuda">
+
+      <label for="convtasnetVocalReduction">Vocal reduction</label>
+      <div class="range-row">
+        <input id="convtasnetVocalReduction" type="range" min="0" max="1" step="0.01">
+        <output id="convtasnetVocalReductionValue"></output>
+      </div>
+
+      <label for="convtasnetSegmentSeconds">Segment length (seconds)</label>
+      <input id="convtasnetSegmentSeconds" type="number" min="0.05" step="0.05">
+
+      <label for="convtasnetVocalSourceIndex">Vocal source index</label>
+      <input id="convtasnetVocalSourceIndex" type="number" min="0" step="1">
+
+      <label for="convtasnetAccompanimentSourceIndex">Accompaniment source index</label>
+      <input id="convtasnetAccompanimentSourceIndex" type="number" min="0" step="1">
+    </div>
+
     <div class="actions">
       <button class="primary" id="apply">Apply</button>
       <button class="secondary" id="restore">Restore startup defaults</button>
@@ -85,11 +121,16 @@
     <dl>
       <dt>State</dt><dd id="statusState">-</dd>
       <dt>Processor</dt><dd id="statusProcessor">-</dd>
+      <dt>Model</dt><dd id="statusModel">-</dd>
       <dt>Device</dt><dd id="statusDevice">-</dd>
+      <dt>Segment length</dt><dd id="statusSegment">-</dd>
+      <dt>Vocal reduction</dt><dd id="statusReduction">-</dd>
+      <dt>Source indexes</dt><dd id="statusSources">-</dd>
       <dt>Last inference</dt><dd id="statusInference">-</dd>
       <dt>Real-time factor</dt><dd id="statusRtf">-</dd>
       <dt>Buffered packets</dt><dd id="statusBuffered">-</dd>
       <dt>Lookahead</dt><dd id="statusLookahead">-</dd>
+      <dt>Last error</dt><dd id="statusError">-</dd>
     </dl>
   </section>
 </main>
@@ -97,34 +138,72 @@
 const $ = id => document.getElementById(id);
 const vocalReduction = $('vocalReduction');
 const centreReduction = $('centreReduction');
-function showPercent(input, output) { output.textContent = `${Math.round(Number(input.value) * 100)}%`; }
+const convtasnetVocalReduction = $('convtasnetVocalReduction');
+
+function showPercent(input, output) {
+  output.textContent = `${Math.round(Number(input.value) * 100)}%`;
+}
+
+function updateVisibleGroups() {
+  const processor = $('processor').value;
+  $('demucsGroup').hidden = processor !== 'htdemucs-vocals';
+  $('convtasnetGroup').hidden = processor !== 'convtasnet-lyrics-causal';
+  $('centreGroup').hidden = processor !== 'stereo-centre-reduction';
+}
+
 vocalReduction.addEventListener('input', () => showPercent(vocalReduction, $('vocalReductionValue')));
 centreReduction.addEventListener('input', () => showPercent(centreReduction, $('centreReductionValue')));
+convtasnetVocalReduction.addEventListener('input', () => showPercent(convtasnetVocalReduction, $('convtasnetVocalReductionValue')));
+$('processor').addEventListener('change', updateVisibleGroups);
 
 function renderStatus(status) {
   const d = status.processor?.diagnostics || {};
   $('statusState').textContent = status.status;
   $('statusProcessor').textContent = status.processor?.name || '-';
+  $('statusModel').textContent = d.model_path || d.model || '-';
   $('statusDevice').textContent = d.device || '-';
-  $('statusInference').textContent = d.last_inference_seconds == null ? '-' : `${d.last_inference_seconds.toFixed(3)} s`;
-  $('statusRtf').textContent = d.last_real_time_factor == null ? '-' : d.last_real_time_factor.toFixed(3);
+  $('statusSegment').textContent = d.segment_seconds == null ? '-' : `${d.segment_seconds} s`;
+  $('statusReduction').textContent = d.vocal_reduction == null ? '-' : `${Math.round(Number(d.vocal_reduction) * 100)}%`;
+  $('statusSources').textContent = d.vocal_source_index == null
+    ? '-'
+    : `vocals ${d.vocal_source_index}, accompaniment ${d.accompaniment_source_index}`;
+  $('statusInference').textContent = d.last_inference_seconds == null ? '-' : `${Number(d.last_inference_seconds).toFixed(3)} s`;
+  $('statusRtf').textContent = d.last_real_time_factor == null ? '-' : Number(d.last_real_time_factor).toFixed(3);
   $('statusBuffered').textContent = d.buffered_input_packets ?? '-';
-  $('statusLookahead').textContent = d.algorithmic_lookahead_ms == null ? '-' : `${d.algorithmic_lookahead_ms.toFixed(1)} ms`;
+  $('statusLookahead').textContent = d.algorithmic_lookahead_ms == null ? '-' : `${Number(d.algorithmic_lookahead_ms).toFixed(1)} ms`;
+  $('statusError').textContent = d.last_error || '-';
 }
 
 async function load() {
   const [settingsResponse, statusResponse] = await Promise.all([fetch('/api/settings'), fetch('/status')]);
+  if (!settingsResponse.ok) throw new Error(`Settings request failed: ${settingsResponse.status}`);
+  if (!statusResponse.ok) throw new Error(`Status request failed: ${statusResponse.status}`);
   const settings = await settingsResponse.json();
   const status = await statusResponse.json();
+
   $('processor').value = settings.processor;
+  $('startupProcessor').textContent = `Startup default: ${settings.startup_defaults?.processor || '-'}`;
+
   $('model').value = settings.demucs.model;
+  $('demucsDevice').value = settings.demucs.device;
   vocalReduction.value = settings.demucs.vocal_reduction;
-  centreReduction.value = settings.centre_reduction.reduction;
   $('segmentSeconds').value = settings.demucs.segment_seconds;
   $('overlap').value = settings.demucs.overlap;
   $('shifts').value = settings.demucs.shifts;
+
+  $('convtasnetModelPath').value = settings.convtasnet.model_path;
+  $('convtasnetDevice').value = settings.convtasnet.device;
+  convtasnetVocalReduction.value = settings.convtasnet.vocal_reduction;
+  $('convtasnetSegmentSeconds').value = settings.convtasnet.segment_seconds;
+  $('convtasnetVocalSourceIndex').value = settings.convtasnet.vocal_source_index;
+  $('convtasnetAccompanimentSourceIndex').value = settings.convtasnet.accompaniment_source_index;
+
+  centreReduction.value = settings.centre_reduction.reduction;
+
   showPercent(vocalReduction, $('vocalReductionValue'));
+  showPercent(convtasnetVocalReduction, $('convtasnetVocalReductionValue'));
   showPercent(centreReduction, $('centreReductionValue'));
+  updateVisibleGroups();
   renderStatus(status);
 }
 
@@ -135,13 +214,26 @@ async function apply() {
     centre_reduction: { reduction: Number(centreReduction.value) },
     demucs: {
       model: $('model').value,
+      device: $('demucsDevice').value,
       segment_seconds: Number($('segmentSeconds').value),
       overlap: Number($('overlap').value),
       shifts: Number($('shifts').value),
       vocal_reduction: Number(vocalReduction.value)
+    },
+    convtasnet: {
+      model_path: $('convtasnetModelPath').value,
+      device: $('convtasnetDevice').value,
+      segment_seconds: Number($('convtasnetSegmentSeconds').value),
+      vocal_reduction: Number(convtasnetVocalReduction.value),
+      vocal_source_index: Number($('convtasnetVocalSourceIndex').value),
+      accompaniment_source_index: Number($('convtasnetAccompanimentSourceIndex').value)
     }
   };
-  const response = await fetch('/api/settings', { method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  const response = await fetch('/api/settings', {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
   const result = await response.json();
   if (!response.ok) throw new Error(result.detail || JSON.stringify(result));
   if (result.status === 'unchanged') {
@@ -163,7 +255,9 @@ $('restore').addEventListener('click', async () => {
     if (!response.ok) throw new Error(result.detail || JSON.stringify(result));
     $('message').textContent = 'Startup defaults restored.';
     await load();
-  } catch (e) { $('message').textContent = e.message; }
+  } catch (e) {
+    $('message').textContent = e.message;
+  }
 });
 $('refresh').addEventListener('click', () => load().catch(e => $('message').textContent = e.message));
 load().catch(e => $('message').textContent = e.message);

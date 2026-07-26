@@ -24,6 +24,7 @@ With the server's default `passthrough` processor, each UDP datagram is returned
 - `client/`: Rust command-line capture, transport and playback client
 - `docs/architecture.md`: system architecture, boundaries and delivery phases
 - `docs/protocol.md`: version-one UDP PCM datagram format
+- `docs/convtasnet-lyrics-causal.md`: causal Conv-TasNet model integration and validation
 - `tests/`: Python processor tests
 
 ## Server deployment
@@ -55,9 +56,9 @@ By default, returned packets are sent to the IP address from which each packet a
 
 No GPU configuration is required for passthrough or stereo-centre reduction.
 
-## GPU Demucs deployment
+## GPU model deployment
 
-HTDemucs uses the GPU-specific Compose override and `Dockerfile.demucs`:
+HTDemucs and the causal Cadenza Conv-TasNet processor use the GPU-specific Compose override and `Dockerfile.demucs`:
 
 ```bash
 docker compose \
@@ -66,11 +67,13 @@ docker compose \
   up -d --build
 ```
 
-The Demucs image deliberately uses CUDA 12.8 with PyTorch and torchaudio 2.7.1 from the `cu128` wheel index. This is required for NVIDIA Blackwell GPUs such as the GeForce RTX 5070 Ti (`sm_120`). Do not downgrade this image to PyTorch 2.4/CUDA 12.4: those binaries do not contain kernels for `sm_120` and fail at runtime with `CUDA error: no kernel image is available for execution on the device`.
+The GPU image deliberately uses CUDA 12.8 with PyTorch and torchaudio 2.7.1 from the `cu128` wheel index. This is required for NVIDIA Blackwell GPUs such as the GeForce RTX 5070 Ti (`sm_120`). Do not downgrade this image to PyTorch 2.4/CUDA 12.4: those binaries do not contain kernels for `sm_120` and fail at runtime with `CUDA error: no kernel image is available for execution on the device`.
 
 `requirements-demucs.txt` also pins NumPy explicitly because Demucs imports it during application startup. Do not add a conflicting torchaudio pin there: torch and torchaudio are installed together from the CUDA 12.8 wheel index by `Dockerfile.demucs`.
 
-After changing the GPU image or Python dependency versions, force a clean rebuild so Docker cannot reuse an incompatible layer:
+The image also downloads `cadenzachallenge/ConvTasNet_Lyrics_Causal` during the build and verifies that the corresponding Clarity `ConvTasNetStereo` architecture can load it offline. For reproducible deployment, set `CONVTASNET_MODEL_REVISION` to a Hugging Face commit rather than leaving it at `main`.
+
+After changing the GPU image, model revision or Python dependency versions, force a clean rebuild so Docker cannot reuse an incompatible layer:
 
 ```bash
 docker compose \
@@ -137,7 +140,20 @@ Processors can also be selected at runtime:
 curl -X PUT http://localhost:8080/processor/passthrough
 curl -X PUT http://localhost:8080/processor/delay-passthrough
 curl -X PUT http://localhost:8080/processor/null
+curl -X PUT http://localhost:8080/processor/htdemucs-vocals
+curl -X PUT http://localhost:8080/processor/convtasnet-lyrics-causal
 ```
+
+To start directly with the causal Conv-TasNet processor:
+
+```bash
+PROCESSOR=convtasnet-lyrics-causal \
+CONVTASNET_SEGMENT_SECONDS=1.0 \
+CONVTASNET_VOCAL_REDUCTION=1.0 \
+docker compose -f compose.yaml -f compose.demucs.yaml up -d --build
+```
+
+See `docs/convtasnet-lyrics-causal.md` for configuration, provenance, source-index validation and current limitations.
 
 Reset processor state after a seek, track change or reconnect:
 

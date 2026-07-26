@@ -31,6 +31,15 @@ class DemucsSettingsUpdate(BaseModel):
     vocal_reduction: float | None = Field(default=None, ge=0, le=1)
 
 
+class ConvTasNetSettingsUpdate(BaseModel):
+    model_path: str | None = None
+    device: str | None = None
+    segment_seconds: float | None = Field(default=None, gt=0)
+    vocal_reduction: float | None = Field(default=None, ge=0, le=1)
+    vocal_source_index: int | None = Field(default=None, ge=0)
+    accompaniment_source_index: int | None = Field(default=None, ge=0)
+
+
 class CentreReductionSettingsUpdate(BaseModel):
     reduction: float | None = Field(default=None, ge=0, le=1)
 
@@ -38,6 +47,7 @@ class CentreReductionSettingsUpdate(BaseModel):
 class RuntimeSettingsUpdate(BaseModel):
     processor: str | None = None
     demucs: DemucsSettingsUpdate | None = None
+    convtasnet: ConvTasNetSettingsUpdate | None = None
     centre_reduction: CentreReductionSettingsUpdate | None = None
 
 
@@ -52,9 +62,9 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Karaoke Anything",
-    version="0.3.0",
+    version="0.4.0",
     description=(
-        "UDP media pipeline with pluggable processors and basic runtime controls."
+        "UDP media pipeline with pluggable processors and runtime controls."
     ),
     lifespan=lifespan,
 )
@@ -101,6 +111,19 @@ def _flatten_updates(payload: RuntimeSettingsUpdate) -> dict[str, object]:
         }
         for request_name, settings_name in mapping.items():
             value = getattr(payload.demucs, request_name)
+            if value is not None and value != getattr(current, settings_name):
+                updates[settings_name] = value
+    if payload.convtasnet is not None:
+        mapping = {
+            "model_path": "convtasnet_model_path",
+            "device": "convtasnet_device",
+            "segment_seconds": "convtasnet_segment_seconds",
+            "vocal_reduction": "convtasnet_vocal_reduction",
+            "vocal_source_index": "convtasnet_vocal_source_index",
+            "accompaniment_source_index": "convtasnet_accompaniment_source_index",
+        }
+        for request_name, settings_name in mapping.items():
+            value = getattr(payload.convtasnet, request_name)
             if value is not None and value != getattr(current, settings_name):
                 updates[settings_name] = value
     if payload.centre_reduction is not None:

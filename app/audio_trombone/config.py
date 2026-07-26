@@ -24,6 +24,13 @@ class Settings:
     demucs_shifts: int = 0
     demucs_vocal_reduction: float = 1.0
 
+    convtasnet_model_path: str = "/models/convtasnet-lyrics-causal"
+    convtasnet_device: str = "auto"
+    convtasnet_segment_seconds: float = 1.0
+    convtasnet_vocal_reduction: float = 1.0
+    convtasnet_vocal_source_index: int = 0
+    convtasnet_accompaniment_source_index: int = 1
+
     centre_reduction: float = 0.7
 
     @classmethod
@@ -45,5 +52,21 @@ class Settings:
             demucs_overlap=float(os.getenv("DEMUCS_OVERLAP", "0.25")),
             demucs_shifts=int(os.getenv("DEMUCS_SHIFTS", "0")),
             demucs_vocal_reduction=float(os.getenv("DEMUCS_VOCAL_REDUCTION", "1.0")),
+            convtasnet_model_path=os.getenv(
+                "CONVTASNET_MODEL_PATH", "/models/convtasnet-lyrics-causal"
+            ),
+            convtasnet_device=os.getenv("CONVTASNET_DEVICE", "auto"),
+            convtasnet_segment_seconds=float(
+                os.getenv("CONVTASNET_SEGMENT_SECONDS", "1.0")
+            ),
+            convtasnet_vocal_reduction=float(
+                os.getenv("CONVTASNET_VOCAL_REDUCTION", "1.0")
+            ),
+            convtasnet_vocal_source_index=int(
+                os.getenv("CONVTASNET_VOCAL_SOURCE_INDEX", "0")
+            ),
+            convtasnet_accompaniment_source_index=int(
+                os.getenv("CONVTASNET_ACCOMPANIMENT_SOURCE_INDEX", "1")
+            ),
             centre_reduction=float(os.getenv("CENTRE_REDUCTION", "0.7")),
         )

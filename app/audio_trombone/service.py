@@ -101,6 +101,14 @@ class TromboneService:
                 "shifts": self.settings.demucs_shifts,
                 "vocal_reduction": self.settings.demucs_vocal_reduction,
             },
+            "convtasnet": {
+                "model_path": self.settings.convtasnet_model_path,
+                "device": self.settings.convtasnet_device,
+                "segment_seconds": self.settings.convtasnet_segment_seconds,
+                "vocal_reduction": self.settings.convtasnet_vocal_reduction,
+                "vocal_source_index": self.settings.convtasnet_vocal_source_index,
+                "accompaniment_source_index": self.settings.convtasnet_accompaniment_source_index,
+            },
             "centre_reduction": {
                 "reduction": self.settings.centre_reduction,
             },
@@ -113,6 +121,14 @@ class TromboneService:
                     "overlap": self.startup_settings.demucs_overlap,
                     "shifts": self.startup_settings.demucs_shifts,
                     "vocal_reduction": self.startup_settings.demucs_vocal_reduction,
+                },
+                "convtasnet": {
+                    "model_path": self.startup_settings.convtasnet_model_path,
+                    "device": self.startup_settings.convtasnet_device,
+                    "segment_seconds": self.startup_settings.convtasnet_segment_seconds,
+                    "vocal_reduction": self.startup_settings.convtasnet_vocal_reduction,
+                    "vocal_source_index": self.startup_settings.convtasnet_vocal_source_index,
+                    "accompaniment_source_index": self.startup_settings.convtasnet_accompaniment_source_index,
                 },
                 "centre_reduction": {
                     "reduction": self.startup_settings.centre_reduction,
@@ -129,6 +145,12 @@ class TromboneService:
             "demucs_overlap",
             "demucs_shifts",
             "demucs_vocal_reduction",
+            "convtasnet_model_path",
+            "convtasnet_device",
+            "convtasnet_segment_seconds",
+            "convtasnet_vocal_reduction",
+            "convtasnet_vocal_source_index",
+            "convtasnet_accompaniment_source_index",
             "centre_reduction",
         }
         unknown = set(updates) - allowed
@@ -143,8 +165,15 @@ class TromboneService:
                 self.processor.vocal_reduction = candidate.demucs_vocal_reduction  # type: ignore[attr-defined]
                 applies_from = "next segment"
                 logger.info(
-                    "Updated live vocal reduction to %.2f",
+                    "Updated live Demucs vocal reduction to %.2f",
                     candidate.demucs_vocal_reduction,
+                )
+            elif "convtasnet_vocal_reduction" in updates:
+                self.processor.vocal_reduction = candidate.convtasnet_vocal_reduction  # type: ignore[attr-defined]
+                applies_from = "next segment"
+                logger.info(
+                    "Updated live ConvTasNet vocal reduction to %.2f",
+                    candidate.convtasnet_vocal_reduction,
                 )
             else:
                 self.processor.centre_reduction = candidate.centre_reduction  # type: ignore[attr-defined]
@@ -176,6 +205,10 @@ class TromboneService:
             and self.processor.name == "htdemucs-vocals"
             and hasattr(self.processor, "vocal_reduction")
         ) or (
+            keys == {"convtasnet_vocal_reduction"}
+            and self.processor.name == "convtasnet-lyrics-causal"
+            and hasattr(self.processor, "vocal_reduction")
+        ) or (
             keys == {"centre_reduction"}
             and self.processor.name == "stereo-centre-reduction"
             and hasattr(self.processor, "centre_reduction")
@@ -193,6 +226,12 @@ class TromboneService:
                 "demucs_overlap",
                 "demucs_shifts",
                 "demucs_vocal_reduction",
+                "convtasnet_model_path",
+                "convtasnet_device",
+                "convtasnet_segment_seconds",
+                "convtasnet_vocal_reduction",
+                "convtasnet_vocal_source_index",
+                "convtasnet_accompaniment_source_index",
                 "centre_reduction",
             )
         }
@@ -205,13 +244,25 @@ class TromboneService:
         if not settings.demucs_model.strip():
             raise ValueError("demucs model must not be empty")
         if settings.demucs_segment_seconds <= 0:
-            raise ValueError("segment_seconds must be greater than zero")
+            raise ValueError("Demucs segment_seconds must be greater than zero")
         if not 0 <= settings.demucs_overlap < 1:
-            raise ValueError("overlap must be between 0.0 and less than 1.0")
+            raise ValueError("Demucs overlap must be between 0.0 and less than 1.0")
         if settings.demucs_shifts < 0:
-            raise ValueError("shifts must be zero or greater")
+            raise ValueError("Demucs shifts must be zero or greater")
         if not 0 <= settings.demucs_vocal_reduction <= 1:
-            raise ValueError("vocal_reduction must be between 0.0 and 1.0")
+            raise ValueError("Demucs vocal_reduction must be between 0.0 and 1.0")
+        if not settings.convtasnet_model_path.strip():
+            raise ValueError("ConvTasNet model_path must not be empty")
+        if settings.convtasnet_segment_seconds <= 0:
+            raise ValueError("ConvTasNet segment_seconds must be greater than zero")
+        if not 0 <= settings.convtasnet_vocal_reduction <= 1:
+            raise ValueError("ConvTasNet vocal_reduction must be between 0.0 and 1.0")
+        if settings.convtasnet_vocal_source_index < 0:
+            raise ValueError("ConvTasNet vocal_source_index must be zero or greater")
+        if settings.convtasnet_accompaniment_source_index < 0:
+            raise ValueError("ConvTasNet accompaniment_source_index must be zero or greater")
+        if settings.convtasnet_vocal_source_index == settings.convtasnet_accompaniment_source_index:
+            raise ValueError("ConvTasNet vocal and accompaniment source indexes must differ")
         if not 0 <= settings.centre_reduction <= 1:
             raise ValueError("centre_reduction must be between 0.0 and 1.0")
 

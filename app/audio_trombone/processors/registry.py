@@ -3,6 +3,7 @@ from collections.abc import Callable
 from audio_trombone.config import Settings
 from audio_trombone.processors.base import AudioProcessor
 from audio_trombone.processors.centre_reduction import StereoCentreReductionProcessor
+from audio_trombone.processors.convtasnet_lyrics import ConvTasNetLyricsProcessor
 from audio_trombone.processors.delay import DelayPassthroughProcessor
 from audio_trombone.processors.htdemucs import HTDemucsProcessor
 from audio_trombone.processors.null import NullProcessor
@@ -28,6 +29,16 @@ class ProcessorRegistry:
                 overlap=settings.demucs_overlap,
                 shifts=settings.demucs_shifts,
                 vocal_reduction=settings.demucs_vocal_reduction,
+            ),
+            "convtasnet-lyrics-causal": lambda: ConvTasNetLyricsProcessor(
+                model_path=settings.convtasnet_model_path,
+                device=settings.convtasnet_device,
+                segment_seconds=settings.convtasnet_segment_seconds,
+                vocal_reduction=settings.convtasnet_vocal_reduction,
+                vocal_source_index=settings.convtasnet_vocal_source_index,
+                accompaniment_source_index=(
+                    settings.convtasnet_accompaniment_source_index
+                ),
             ),
         }
 
