@@ -17,6 +17,12 @@ class Settings:
     input_queue_size: int = 512
     max_packet_size: int = 65535
 
+    demucs_model: str = "htdemucs"
+    demucs_device: str = "auto"
+    demucs_segment_seconds: float = 6.0
+    demucs_overlap: float = 0.25
+    demucs_shifts: int = 0
+
     @classmethod
     def from_environment(cls) -> "Settings":
         return cls(
@@ -30,4 +36,9 @@ class Settings:
             processor=os.getenv("PROCESSOR", "passthrough"),
             input_queue_size=int(os.getenv("INPUT_QUEUE_SIZE", "512")),
             max_packet_size=int(os.getenv("MAX_PACKET_SIZE", "65535")),
+            demucs_model=os.getenv("DEMUCS_MODEL", "htdemucs"),
+            demucs_device=os.getenv("DEMUCS_DEVICE", "auto"),
+            demucs_segment_seconds=float(os.getenv("DEMUCS_SEGMENT_SECONDS", "6.0")),
+            demucs_overlap=float(os.getenv("DEMUCS_OVERLAP", "0.25")),
+            demucs_shifts=int(os.getenv("DEMUCS_SHIFTS", "0")),
         )

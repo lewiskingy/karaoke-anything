@@ -1,7 +1,9 @@
 from collections.abc import Callable
 
+from audio_trombone.config import Settings
 from audio_trombone.processors.base import AudioProcessor
 from audio_trombone.processors.delay import DelayPassthroughProcessor
+from audio_trombone.processors.htdemucs import HTDemucsProcessor
 from audio_trombone.processors.null import NullProcessor
 from audio_trombone.processors.passthrough import PassthroughProcessor
 
@@ -9,11 +11,19 @@ ProcessorFactory = Callable[[], AudioProcessor]
 
 
 class ProcessorRegistry:
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
+        settings = settings or Settings.from_environment()
         self._factories: dict[str, ProcessorFactory] = {
             "passthrough": PassthroughProcessor,
             "delay-passthrough": lambda: DelayPassthroughProcessor(delay_ms=5.0),
             "null": NullProcessor,
+            "htdemucs-vocals": lambda: HTDemucsProcessor(
+                model_name=settings.demucs_model,
+                device=settings.demucs_device,
+                segment_seconds=settings.demucs_segment_seconds,
+                overlap=settings.demucs_overlap,
+                shifts=settings.demucs_shifts,
+            ),
         }
 
     def create(self, name: str) -> AudioProcessor:
