@@ -31,9 +31,14 @@ class DemucsSettingsUpdate(BaseModel):
     vocal_reduction: float | None = Field(default=None, ge=0, le=1)
 
 
+class CentreReductionSettingsUpdate(BaseModel):
+    reduction: float | None = Field(default=None, ge=0, le=1)
+
+
 class RuntimeSettingsUpdate(BaseModel):
     processor: str | None = None
     demucs: DemucsSettingsUpdate | None = None
+    centre_reduction: CentreReductionSettingsUpdate | None = None
 
 
 @asynccontextmanager
@@ -47,10 +52,9 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Karaoke Anything",
-    version="0.2.0",
+    version="0.3.0",
     description=(
-        "UDP media pipeline with a pluggable processor interface and basic "
-        "runtime controls."
+        "UDP media pipeline with pluggable processors and basic runtime controls."
     ),
     lifespan=lifespan,
 )
@@ -99,6 +103,10 @@ def _flatten_updates(payload: RuntimeSettingsUpdate) -> dict[str, object]:
             value = getattr(payload.demucs, request_name)
             if value is not None and value != getattr(current, settings_name):
                 updates[settings_name] = value
+    if payload.centre_reduction is not None:
+        value = payload.centre_reduction.reduction
+        if value is not None and value != current.centre_reduction:
+            updates["centre_reduction"] = value
     return updates
 
 
@@ -152,7 +160,6 @@ async def select_processor(processor_name: str) -> dict:
         await service.select_processor(processor_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     return {
         "status": "ok",
         "processor": service.processor.name,
