@@ -1,6 +1,6 @@
 # HTDemucs streaming prototype
 
-This processor is the first model-backed Karaoke Anything implementation. It separates the incoming stereo mix into vocals and accompaniment with HTDemucs and returns the accompaniment.
+This processor is the first model-backed Karaoke Anything implementation. It separates the incoming stereo mix into vocals and accompaniment with HTDemucs and returns a configurable blend in which the estimated vocal stem can be reduced partially or removed completely.
 
 It is deliberately experimental. The objective is continuous, audibly useful vocal reduction and measured real-time performance, not low latency.
 
@@ -10,7 +10,7 @@ It is deliberately experimental. The objective is continuous, audibly useful voc
 KANY f32 PCM packets
   -> validate and assemble six seconds of stereo audio
   -> run HTDemucs on a background worker using CUDA
-  -> subtract the vocals stem from the resampled mixture
+  -> subtract a configurable proportion of the vocals stem from the mixture
   -> resample back to the client rate
   -> rebuild the original KANY packets
   -> release one processed packet per incoming packet
@@ -55,7 +55,7 @@ docker compose -f compose.yaml -f compose.demucs.yaml up -d --build
 
 The first start downloads the selected model into the named `demucs-model-cache` volume. Startup can therefore take several minutes. Later starts reuse the cached model.
 
-The override selects:
+The override selects these defaults, each of which can be replaced through the shell environment or a project `.env` file:
 
 ```text
 PROCESSOR=htdemucs-vocals
@@ -64,9 +64,44 @@ DEMUCS_DEVICE=auto
 DEMUCS_SEGMENT_SECONDS=6.0
 DEMUCS_OVERLAP=0.25
 DEMUCS_SHIFTS=0
+DEMUCS_VOCAL_REDUCTION=1.0
 ```
 
 `DEMUCS_DEVICE=auto` selects CUDA when PyTorch can see it and otherwise falls back to CPU. CPU mode is useful for diagnosis but is unlikely to sustain real-time HTDemucs processing.
+
+### Vocal reduction level
+
+`DEMUCS_VOCAL_REDUCTION` controls how much of the estimated vocal stem is subtracted from the original mix:
+
+- `0.0` retains the original mix and applies no vocal reduction;
+- `0.5` reduces the estimated vocal stem by 50%, retaining a half-level guide vocal;
+- `1.0` removes the estimated vocal stem completely and preserves the previous behaviour.
+
+The calculation is:
+
+```text
+output = original mix - (estimated vocals × DEMUCS_VOCAL_REDUCTION)
+```
+
+For a roughly 50% reduction, create or update `.env` in the repository root:
+
+```dotenv
+DEMUCS_VOCAL_REDUCTION=0.5
+```
+
+Then recreate the service with both Compose files:
+
+```bash
+docker compose -f compose.yaml -f compose.demucs.yaml up -d --build --force-recreate
+```
+
+A code or image rebuild is only required after code changes. For later adjustments to the `.env` value, this is sufficient:
+
+```bash
+docker compose -f compose.yaml -f compose.demucs.yaml up -d --force-recreate
+```
+
+The selected value appears in the HTDemucs startup log and under `processor_diagnostics.vocal_reduction` in `/status`. Values outside `0.0` to `1.0` cause processor startup to fail rather than silently producing an unexpected mix.
 
 If the normal HTTP host port is already in use, retain the local port override already used for the passthrough deployment, for example `8180:8080`.
 
@@ -76,7 +111,7 @@ If the normal HTTP host port is already in use, retain the local port override a
 docker compose -f compose.yaml -f compose.demucs.yaml logs -f karaoke-anything
 ```
 
-Expected startup messages include the selected device, model download/loading and the model sample rate.
+Expected startup messages include the selected device, model download/loading, model sample rate and vocal reduction level.
 
 Check the service after model loading completes:
 
@@ -98,7 +133,7 @@ No client change is required. Continue using the working 48 kHz stereo command:
 
 Leave Spotify or the karaoke application routed to `CABLE Input`.
 
-There will be silence during the initial segment and inference delay. After that, accompaniment should begin and continue at a fixed delay behind the source.
+There will be silence during the initial segment and inference delay. After that, the reduced-vocal mix should begin and continue at a fixed delay behind the source.
 
 ## Switching processors
 
@@ -124,6 +159,14 @@ Start with the defaults. Once the first song works, capture:
 - vocal leakage;
 - artefacts at six-second boundaries.
 
+For songs in which complete removal makes harmonies or vocal-led sections difficult to follow, start with:
+
+```dotenv
+DEMUCS_VOCAL_REDUCTION=0.5
+```
+
+Try values such as `0.65` or `0.75` when you want stronger suppression while retaining some guide vocal.
+
 If processing cannot keep up, try reducing overlap before reducing segment duration:
 
 ```yaml
@@ -139,6 +182,6 @@ Shorter segments reduce buffering latency but can reduce quality and make segmen
 - Multi-second fixed delay.
 - No explicit crossfade between outer streaming segments yet.
 - No adaptive jitter or model back-pressure policy.
-- No vocal-level control: output is currently mixture minus estimated vocals.
+- Vocal reduction is configured at service startup rather than changed live.
 - A failed or slower-than-real-time inference can cause silence or eventual underruns.
 - The model and CUDA image are much larger than the passthrough image.
