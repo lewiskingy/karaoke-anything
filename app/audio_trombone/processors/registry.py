@@ -1,11 +1,11 @@
 from collections.abc import Callable
 
-from audio_trombone.processors.base import MediaProcessor
+from audio_trombone.processors.base import AudioProcessor
 from audio_trombone.processors.delay import DelayPassthroughProcessor
 from audio_trombone.processors.null import NullProcessor
 from audio_trombone.processors.passthrough import PassthroughProcessor
 
-ProcessorFactory = Callable[[], MediaProcessor]
+ProcessorFactory = Callable[[], AudioProcessor]
 
 
 class ProcessorRegistry:
@@ -16,7 +16,7 @@ class ProcessorRegistry:
             "null": NullProcessor,
         }
 
-    def create(self, name: str) -> MediaProcessor:
+    def create(self, name: str) -> AudioProcessor:
         factory = self._factories.get(name)
         if factory is None:
             available = ", ".join(sorted(self._factories))

@@ -1,0 +1,13 @@
+[package]
+name = "karaoke-anything-client"
+version = "0.1.0"
+edition = "2021"
+description = "Low-latency audio capture, UDP transport and playback client for Karaoke Anything"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+cpal = "0.15"
+crossbeam-channel = "0.5"
+ctrlc = "3.4"

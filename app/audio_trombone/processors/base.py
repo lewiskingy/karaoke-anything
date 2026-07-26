@@ -13,7 +13,17 @@ class ProcessorCapabilities:
     changes_payload: bool
 
 
-class MediaProcessor(ABC):
+class AudioProcessor(ABC):
+    """
+    Audio-processing extension point for the server pipeline.
+
+    The current transport still supplies opaque UDP payloads. A future protocol
+    layer will decode those payloads into timestamped PCM frames before invoking
+    model-backed processors. Keeping the lifecycle abstraction now allows model
+    loading, reset, buffering and flush behaviour to be introduced without
+    changing service orchestration.
+    """
+
     name: str
     description: str
     capabilities: ProcessorCapabilities

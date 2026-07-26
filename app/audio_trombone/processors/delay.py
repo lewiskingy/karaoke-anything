@@ -2,10 +2,10 @@ import asyncio
 from typing import AsyncIterator
 
 from audio_trombone.models import MediaPacket, ProcessedPacket
-from audio_trombone.processors.base import MediaProcessor, ProcessorCapabilities
+from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities
 
 
-class DelayPassthroughProcessor(MediaProcessor):
+class DelayPassthroughProcessor(AudioProcessor):
     name = "delay-passthrough"
     description = "Returns payloads unchanged after a configurable delay."
     capabilities = ProcessorCapabilities(
