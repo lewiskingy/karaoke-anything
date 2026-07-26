@@ -4,13 +4,14 @@ services:
       context: .
       dockerfile: Dockerfile.demucs
     environment:
-      PROCESSOR: "htdemucs-vocals"
+      PROCESSOR: "${PROCESSOR:-htdemucs-vocals}"
       DEMUCS_MODEL: "${DEMUCS_MODEL:-htdemucs}"
       DEMUCS_DEVICE: "${DEMUCS_DEVICE:-auto}"
       DEMUCS_SEGMENT_SECONDS: "${DEMUCS_SEGMENT_SECONDS:-6.0}"
       DEMUCS_OVERLAP: "${DEMUCS_OVERLAP:-0.25}"
       DEMUCS_SHIFTS: "${DEMUCS_SHIFTS:-0}"
       DEMUCS_VOCAL_REDUCTION: "${DEMUCS_VOCAL_REDUCTION:-1.0}"
+      CENTRE_REDUCTION: "${CENTRE_REDUCTION:-0.7}"
       TORCH_HOME: "/models/torch"
     gpus: all
     volumes:
