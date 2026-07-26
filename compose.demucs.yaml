@@ -1,0 +1,19 @@
+services:
+  karaoke-anything:
+    build:
+      context: .
+      dockerfile: Dockerfile.demucs
+    environment:
+      PROCESSOR: "htdemucs-vocals"
+      DEMUCS_MODEL: "htdemucs"
+      DEMUCS_DEVICE: "auto"
+      DEMUCS_SEGMENT_SECONDS: "6.0"
+      DEMUCS_OVERLAP: "0.25"
+      DEMUCS_SHIFTS: "0"
+      TORCH_HOME: "/models/torch"
+    gpus: all
+    volumes:
+      - demucs-model-cache:/models/torch
+
+volumes:
+  demucs-model-cache:
