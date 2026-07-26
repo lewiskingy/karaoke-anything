@@ -1,0 +1,2 @@
+demucs==4.0.1
+torchaudio==2.4.1
