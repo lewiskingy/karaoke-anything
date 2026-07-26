@@ -1,6 +1,7 @@
-FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/app \
@@ -9,13 +10,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl \
+    && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-venv \
+        ffmpeg \
+        curl \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-demucs.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 torchaudio==2.4.1 \
-    && pip install --no-cache-dir -r requirements-demucs.txt
+RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt \
+    && python3 -m pip install --break-system-packages --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.7.1 \
+        torchaudio==2.7.1 \
+    && python3 -m pip install --break-system-packages --no-cache-dir -r requirements-demucs.txt
 
 COPY app ./app
 
@@ -25,6 +35,6 @@ EXPOSE 8080/tcp
 EXPOSE 5004/udp
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=180s --retries=5 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"
 
-CMD ["python", "app/main.py"]
+CMD ["python3", "app/main.py"]
