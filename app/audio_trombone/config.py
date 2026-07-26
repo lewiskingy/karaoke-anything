@@ -22,6 +22,7 @@ class Settings:
     demucs_segment_seconds: float = 6.0
     demucs_overlap: float = 0.25
     demucs_shifts: int = 0
+    demucs_vocal_reduction: float = 1.0
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -41,4 +42,5 @@ class Settings:
             demucs_segment_seconds=float(os.getenv("DEMUCS_SEGMENT_SECONDS", "6.0")),
             demucs_overlap=float(os.getenv("DEMUCS_OVERLAP", "0.25")),
             demucs_shifts=int(os.getenv("DEMUCS_SHIFTS", "0")),
+            demucs_vocal_reduction=float(os.getenv("DEMUCS_VOCAL_REDUCTION", "1.0")),
         )
