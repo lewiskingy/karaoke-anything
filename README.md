@@ -68,7 +68,9 @@ docker compose \
 
 The Demucs image deliberately uses CUDA 12.8 with PyTorch and torchaudio 2.7.1 from the `cu128` wheel index. This is required for NVIDIA Blackwell GPUs such as the GeForce RTX 5070 Ti (`sm_120`). Do not downgrade this image to PyTorch 2.4/CUDA 12.4: those binaries do not contain kernels for `sm_120` and fail at runtime with `CUDA error: no kernel image is available for execution on the device`.
 
-After changing the GPU image or PyTorch versions, force a clean rebuild so Docker cannot reuse an incompatible layer:
+`requirements-demucs.txt` also pins NumPy explicitly because Demucs imports it during application startup. Do not add a conflicting torchaudio pin there: torch and torchaudio are installed together from the CUDA 12.8 wheel index by `Dockerfile.demucs`.
+
+After changing the GPU image or Python dependency versions, force a clean rebuild so Docker cannot reuse an incompatible layer:
 
 ```bash
 docker compose \
@@ -87,14 +89,14 @@ docker compose \
   up -d
 ```
 
-Verify the installed build and GPU architecture inside the running container:
+Verify the installed build and dependencies inside the running container:
 
 ```bash
 docker compose \
   -f compose.yaml \
   -f compose.demucs.yaml \
   exec karaoke-anything python3 -c \
-  "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0), torch.cuda.get_arch_list())"
+  "import numpy, torch, torchaudio, demucs; print('numpy', numpy.__version__); print('torch', torch.__version__); print('torchaudio', torchaudio.__version__); print('cuda', torch.version.cuda); print('gpu', torch.cuda.get_device_name(0)); print('architectures', torch.cuda.get_arch_list())"
 ```
 
 For an RTX 5070 Ti, the architecture list must include `sm_120`.
