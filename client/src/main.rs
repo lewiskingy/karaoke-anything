@@ -19,7 +19,9 @@ const SAMPLE_FORMAT_F32_LE: u8 = 1;
 
 #[derive(Parser, Debug)]
 #[command(name = "karaoke-anything-client")]
-#[command(about = "Capture desktop audio, send it through Karaoke Anything, and play the returned stream")]
+#[command(
+    about = "Capture desktop audio, send it through Karaoke Anything, and play the returned stream"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -95,13 +97,15 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
     }
 
     let input_device = select_device(
-        host.input_devices().context("failed to enumerate input devices")?,
+        host.input_devices()
+            .context("failed to enumerate input devices")?,
         cli.capture.as_deref(),
         host.default_input_device(),
         "input",
     )?;
     let output_device = select_device(
-        host.output_devices().context("failed to enumerate output devices")?,
+        host.output_devices()
+            .context("failed to enumerate output devices")?,
         cli.playback.as_deref(),
         host.default_output_device(),
         "output",
@@ -110,11 +114,7 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
     let input_name = input_device.name().unwrap_or_else(|_| "<unknown>".into());
     let output_name = output_device.name().unwrap_or_else(|_| "<unknown>".into());
 
-    let input_config = choose_input_config(
-        &input_device,
-        cli.sample_rate,
-        cli.channels,
-    )?;
+    let input_config = choose_input_config(&input_device, cli.sample_rate, cli.channels)?;
     let output_config = choose_output_config(
         &output_device,
         input_config.sample_rate.0,
@@ -147,7 +147,10 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
     println!("Capture:  {input_name}");
     println!("Playback: {output_name}");
     println!("Format:   {sample_rate} Hz, {channels} channels, f32");
-    println!("Packet:   {:.2} ms ({} frames)", cli.packet_ms, frames_per_packet);
+    println!(
+        "Packet:   {:.2} ms ({} frames)",
+        cli.packet_ms, frames_per_packet
+    );
     println!("Server:   {}", cli.server);
     println!("Receive:  0.0.0.0:{}", cli.receive_port);
 
@@ -197,12 +200,8 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
         )
     });
 
-    let capture_stream = build_input_stream(
-        &input_device,
-        &input_config,
-        packet_tx,
-        samples_per_packet,
-    )?;
+    let capture_stream =
+        build_input_stream(&input_device, &input_config, packet_tx, samples_per_packet)?;
     let playback_stream = build_output_stream(
         &output_device,
         &output_config,
@@ -210,8 +209,12 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
         prebuffer_samples,
     )?;
 
-    capture_stream.play().context("failed to start capture stream")?;
-    playback_stream.play().context("failed to start playback stream")?;
+    capture_stream
+        .play()
+        .context("failed to start capture stream")?;
+    playback_stream
+        .play()
+        .context("failed to start playback stream")?;
 
     println!("Streaming. Press Ctrl-C to stop.");
     while running.load(Ordering::SeqCst) {
@@ -221,7 +224,9 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
     drop(capture_stream);
     drop(playback_stream);
 
-    sender.join().map_err(|_| anyhow!("sender thread panicked"))??;
+    sender
+        .join()
+        .map_err(|_| anyhow!("sender thread panicked"))??;
     receiver
         .join()
         .map_err(|_| anyhow!("receiver thread panicked"))??;
@@ -231,12 +236,18 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
 
 fn list_devices(host: &cpal::Host) -> Result<()> {
     println!("Input devices:");
-    for device in host.input_devices().context("failed to enumerate input devices")? {
+    for device in host
+        .input_devices()
+        .context("failed to enumerate input devices")?
+    {
         println!("  {}", device.name().unwrap_or_else(|_| "<unknown>".into()));
     }
 
     println!("\nOutput devices:");
-    for device in host.output_devices().context("failed to enumerate output devices")? {
+    for device in host
+        .output_devices()
+        .context("failed to enumerate output devices")?
+    {
         println!("  {}", device.name().unwrap_or_else(|_| "<unknown>".into()));
     }
     Ok(())
@@ -265,7 +276,10 @@ where
             0 => bail!("no {kind} device contains '{needle}'"),
             1 => Ok(matches.remove(0).1),
             _ => {
-                let names = matches.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+                let names = matches
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>();
                 bail!("{kind} device selector is ambiguous: {}", names.join(", "))
             }
         };
@@ -274,7 +288,11 @@ where
     default.ok_or_else(|| anyhow!("no default {kind} device is available"))
 }
 
-fn choose_input_config(device: &Device, preferred_rate: u32, preferred_channels: u16) -> Result<StreamConfig> {
+fn choose_input_config(
+    device: &Device,
+    preferred_rate: u32,
+    preferred_channels: u16,
+) -> Result<StreamConfig> {
     for range in device
         .supported_input_configs()
         .context("failed to read input configurations")?
@@ -284,18 +302,26 @@ fn choose_input_config(device: &Device, preferred_rate: u32, preferred_channels:
             && range.min_sample_rate().0 <= preferred_rate
             && range.max_sample_rate().0 >= preferred_rate
         {
-            return Ok(range.with_sample_rate(cpal::SampleRate(preferred_rate)).config());
+            return Ok(range
+                .with_sample_rate(cpal::SampleRate(preferred_rate))
+                .config());
         }
     }
 
-    let default = device.default_input_config().context("no default input configuration")?;
+    let default = device
+        .default_input_config()
+        .context("no default input configuration")?;
     if default.sample_format() != SampleFormat::F32 {
         bail!("prototype currently requires an f32 input device configuration");
     }
     Ok(default.config())
 }
 
-fn choose_output_config(device: &Device, preferred_rate: u32, preferred_channels: u16) -> Result<StreamConfig> {
+fn choose_output_config(
+    device: &Device,
+    preferred_rate: u32,
+    preferred_channels: u16,
+) -> Result<StreamConfig> {
     for range in device
         .supported_output_configs()
         .context("failed to read output configurations")?
@@ -305,11 +331,15 @@ fn choose_output_config(device: &Device, preferred_rate: u32, preferred_channels
             && range.min_sample_rate().0 <= preferred_rate
             && range.max_sample_rate().0 >= preferred_rate
         {
-            return Ok(range.with_sample_rate(cpal::SampleRate(preferred_rate)).config());
+            return Ok(range
+                .with_sample_rate(cpal::SampleRate(preferred_rate))
+                .config());
         }
     }
 
-    let default = device.default_output_config().context("no default output configuration")?;
+    let default = device
+        .default_output_config()
+        .context("no default output configuration")?;
     if default.sample_format() != SampleFormat::F32 {
         bail!("prototype currently requires an f32 output device configuration");
     }
@@ -435,7 +465,9 @@ fn receiver_loop(
         match socket.recv_from(&mut buffer) {
             Ok((length, _)) => match decode_packet(&buffer[..length]) {
                 Ok(packet) => {
-                    if packet.channels != expected_channels || packet.sample_rate != expected_sample_rate {
+                    if packet.channels != expected_channels
+                        || packet.sample_rate != expected_sample_rate
+                    {
                         eprintln!(
                             "ignored incompatible packet: {}Hz/{}ch",
                             packet.sample_rate, packet.channels
@@ -453,7 +485,9 @@ fn receiver_loop(
                     }
                     expected_sequence = Some(packet.sequence.wrapping_add(1));
 
-                    let mut queue = queue.lock().map_err(|_| anyhow!("playback queue poisoned"))?;
+                    let mut queue = queue
+                        .lock()
+                        .map_err(|_| anyhow!("playback queue poisoned"))?;
                     while queue.len() + packet.samples.len() > max_samples && !queue.is_empty() {
                         queue.pop_front();
                     }
