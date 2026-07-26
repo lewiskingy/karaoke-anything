@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Karaoke Anything Settings</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #151515; color: #f5f5f5; }
+    main { max-width: 720px; margin: 0 auto; padding: 24px; }
+    h1 { margin-bottom: 4px; }
+    .muted { color: #aaa; }
+    .card { background: #232323; border: 1px solid #383838; border-radius: 12px; padding: 18px; margin: 18px 0; }
+    label { display: block; margin: 14px 0 6px; font-weight: 600; }
+    input, select, button { font: inherit; }
+    input[type=text], input[type=number], select { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #555; background: #171717; color: white; }
+    .range-row { display: grid; grid-template-columns: 1fr 72px; gap: 12px; align-items: center; }
+    input[type=range] { width: 100%; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+    button.primary { background: #36a9e1; color: #08131a; font-weight: 700; }
+    button.secondary { background: #444; color: white; }
+    #message { min-height: 24px; margin-top: 12px; }
+    dl { display: grid; grid-template-columns: 180px 1fr; gap: 8px; }
+    dt { color: #aaa; }
+    dd { margin: 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Karaoke Anything</h1>
+  <div class="muted">Runtime controls. Compose/.env values become the defaults again when the container starts.</div>
+
+  <section class="card">
+    <label for="processor">Processor</label>
+    <select id="processor">
+      <option value="htdemucs-vocals">HTDemucs vocals</option>
+      <option value="passthrough">Passthrough</option>
+      <option value="null">Silence</option>
+    </select>
+
+    <label for="model">Demucs model</label>
+    <input id="model" type="text">
+
+    <label for="vocalReduction">Vocal reduction</label>
+    <div class="range-row">
+      <input id="vocalReduction" type="range" min="0" max="1" step="0.01">
+      <output id="vocalReductionValue"></output>
+    </div>
+
+    <label for="segmentSeconds">Segment length (seconds)</label>
+    <input id="segmentSeconds" type="number" min="0.1" step="0.1">
+
+    <label for="overlap">Overlap</label>
+    <input id="overlap" type="number" min="0" max="0.99" step="0.01">
+
+    <label for="shifts">Shifts</label>
+    <input id="shifts" type="number" min="0" step="1">
+
+    <div class="actions">
+      <button class="primary" id="apply">Apply</button>
+      <button class="secondary" id="restore">Restore startup defaults</button>
+      <button class="secondary" id="refresh">Refresh</button>
+    </div>
+    <div id="message"></div>
+  </section>
+
+  <section class="card">
+    <h2>Status</h2>
+    <dl>
+      <dt>State</dt><dd id="statusState">-</dd>
+      <dt>Processor</dt><dd id="statusProcessor">-</dd>
+      <dt>Device</dt><dd id="statusDevice">-</dd>
+      <dt>Last inference</dt><dd id="statusInference">-</dd>
+      <dt>Real-time factor</dt><dd id="statusRtf">-</dd>
+      <dt>Buffered packets</dt><dd id="statusBuffered">-</dd>
+    </dl>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const reduction = $('vocalReduction');
+function showReduction() { $('vocalReductionValue').textContent = `${Math.round(Number(reduction.value) * 100)}%`; }
+reduction.addEventListener('input', showReduction);
+
+async function load() {
+  const [settingsResponse, statusResponse] = await Promise.all([fetch('/api/settings'), fetch('/status')]);
+  const settings = await settingsResponse.json();
+  const status = await statusResponse.json();
+  $('processor').value = settings.processor;
+  $('model').value = settings.demucs.model;
+  reduction.value = settings.demucs.vocal_reduction;
+  $('segmentSeconds').value = settings.demucs.segment_seconds;
+  $('overlap').value = settings.demucs.overlap;
+  $('shifts').value = settings.demucs.shifts;
+  showReduction();
+  const d = status.processor?.diagnostics || {};
+  $('statusState').textContent = status.status;
+  $('statusProcessor').textContent = status.processor?.name || '-';
+  $('statusDevice').textContent = d.device || '-';
+  $('statusInference').textContent = d.last_inference_seconds == null ? '-' : `${d.last_inference_seconds.toFixed(3)} s`;
+  $('statusRtf').textContent = d.last_real_time_factor == null ? '-' : d.last_real_time_factor.toFixed(3);
+  $('statusBuffered').textContent = d.buffered_input_packets ?? '-';
+}
+
+async function apply() {
+  $('message').textContent = 'Applying…';
+  const body = {
+    processor: $('processor').value,
+    demucs: {
+      model: $('model').value,
+      segment_seconds: Number($('segmentSeconds').value),
+      overlap: Number($('overlap').value),
+      shifts: Number($('shifts').value),
+      vocal_reduction: Number(reduction.value)
+    }
+  };
+  const response = await fetch('/api/settings', { method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.detail || JSON.stringify(result));
+  $('message').textContent = result.processor_restarted ? 'Applied; processor reinitialised.' : 'Applied; takes effect from the next segment.';
+  await load();
+}
+
+$('apply').addEventListener('click', () => apply().catch(e => $('message').textContent = e.message));
+$('restore').addEventListener('click', async () => {
+  try {
+    $('message').textContent = 'Restoring…';
+    const response = await fetch('/api/settings', {method: 'DELETE'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || JSON.stringify(result));
+    $('message').textContent = 'Startup defaults restored.';
+    await load();
+  } catch (e) { $('message').textContent = e.message; }
+});
+$('refresh').addEventListener('click', () => load().catch(e => $('message').textContent = e.message));
+load().catch(e => $('message').textContent = e.message);
+setInterval(() => fetch('/status').then(r => r.json()).then(status => {
+  const d = status.processor?.diagnostics || {};
+  $('statusState').textContent = status.status;
+  $('statusProcessor').textContent = status.processor?.name || '-';
+  $('statusDevice').textContent = d.device || '-';
+  $('statusInference').textContent = d.last_inference_seconds == null ? '-' : `${d.last_inference_seconds.toFixed(3)} s`;
+  $('statusRtf').textContent = d.last_real_time_factor == null ? '-' : d.last_real_time_factor.toFixed(3);
+  $('statusBuffered').textContent = d.buffered_input_packets ?? '-';
+}).catch(() => {}), 3000);
+</script>
+</body>
+</html>
