@@ -1,11 +1,15 @@
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
+ARG CONVTASNET_MODEL_REPO=cadenzachallenge/ConvTasNet_Lyrics_Causal
+ARG CONVTASNET_MODEL_REVISION=main
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/app \
-    TORCH_HOME=/models/torch
+    TORCH_HOME=/models/torch \
+    HF_HUB_DISABLE_TELEMETRY=1
 
 WORKDIR /app
 
@@ -27,9 +31,12 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirement
         torchaudio==2.7.1 \
     && python3 -m pip install --break-system-packages --no-cache-dir -r requirements-demucs.txt
 
+RUN mkdir -p /models/torch /models/convtasnet-lyrics-causal \
+    && python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${CONVTASNET_MODEL_REPO}', revision='${CONVTASNET_MODEL_REVISION}', local_dir='/models/convtasnet-lyrics-causal')"
+
 COPY app ./app
 
-RUN mkdir -p /models/torch
+RUN python3 -c "from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo; model = ConvTasNetStereo.from_pretrained('/models/convtasnet-lyrics-causal', local_files_only=True); print('ConvTasNet model loaded', model.samplerate, model.audio_channels, model.C)"
 
 EXPOSE 8080/tcp
 EXPOSE 5004/udp
