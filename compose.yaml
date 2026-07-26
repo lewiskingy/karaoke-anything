@@ -14,7 +14,8 @@ services:
       HTTP_PORT: "8080"
       LOG_LEVEL: "INFO"
 
-      PROCESSOR: "passthrough"
+      PROCESSOR: "${PROCESSOR:-passthrough}"
+      CENTRE_REDUCTION: "${CENTRE_REDUCTION:-0.7}"
       INPUT_QUEUE_SIZE: "512"
 
       # Optional fixed destination. Otherwise use the sender's IP address.
