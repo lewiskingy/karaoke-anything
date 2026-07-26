@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 from audio_trombone.config import Settings
 from audio_trombone.processors.base import AudioProcessor
+from audio_trombone.processors.centre_reduction import StereoCentreReductionProcessor
 from audio_trombone.processors.delay import DelayPassthroughProcessor
 from audio_trombone.processors.htdemucs import HTDemucsProcessor
 from audio_trombone.processors.null import NullProcessor
@@ -17,6 +18,9 @@ class ProcessorRegistry:
             "passthrough": PassthroughProcessor,
             "delay-passthrough": lambda: DelayPassthroughProcessor(delay_ms=5.0),
             "null": NullProcessor,
+            "stereo-centre-reduction": lambda: StereoCentreReductionProcessor(
+                centre_reduction=settings.centre_reduction,
+            ),
             "htdemucs-vocals": lambda: HTDemucsProcessor(
                 model_name=settings.demucs_model,
                 device=settings.demucs_device,
