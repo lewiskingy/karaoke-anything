@@ -24,6 +24,8 @@ class Settings:
     demucs_shifts: int = 0
     demucs_vocal_reduction: float = 1.0
 
+    centre_reduction: float = 0.7
+
     @classmethod
     def from_environment(cls) -> "Settings":
         return cls(
@@ -43,4 +45,5 @@ class Settings:
             demucs_overlap=float(os.getenv("DEMUCS_OVERLAP", "0.25")),
             demucs_shifts=int(os.getenv("DEMUCS_SHIFTS", "0")),
             demucs_vocal_reduction=float(os.getenv("DEMUCS_VOCAL_REDUCTION", "1.0")),
+            centre_reduction=float(os.getenv("CENTRE_REDUCTION", "0.7")),
         )
