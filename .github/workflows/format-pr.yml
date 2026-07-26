@@ -1,0 +1,38 @@
+name: Format Rust PR
+
+on:
+  push:
+    branches:
+      - agent/add-rust-client-and-architecture
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: windows-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/add-rust-client-and-architecture
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format Rust client
+        working-directory: client
+        run: cargo fmt --all
+
+      - name: Commit formatting
+        shell: pwsh
+        run: |
+          if (git status --porcelain) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add client/src/main.rs
+            git commit -m "Format Rust client"
+            git push origin HEAD:agent/add-rust-client-and-architecture
+          }
