@@ -27,7 +27,7 @@ class HTDemucsProcessor(AudioProcessor):
 
     name = "htdemucs-vocals"
     description = (
-        "Buffered HTDemucs vocals removal. Adds a fixed multi-second delay and "
+        "Buffered HTDemucs vocal reduction. Adds a fixed multi-second delay and "
         "requires the Demucs GPU image for practical real-time operation."
     )
     capabilities = ProcessorCapabilities(
@@ -45,18 +45,22 @@ class HTDemucsProcessor(AudioProcessor):
         segment_seconds: float = 6.0,
         overlap: float = 0.25,
         shifts: int = 0,
+        vocal_reduction: float = 1.0,
         inference_fn: InferenceFunction | None = None,
     ) -> None:
         if segment_seconds <= 0:
             raise ValueError("segment_seconds must be greater than zero")
         if not 0 <= overlap < 1:
             raise ValueError("overlap must be between zero and one")
+        if not 0 <= vocal_reduction <= 1:
+            raise ValueError("vocal_reduction must be between 0.0 and 1.0")
 
         self.model_name = model_name
         self.requested_device = device
         self.segment_seconds = segment_seconds
         self.overlap = overlap
         self.shifts = shifts
+        self.vocal_reduction = vocal_reduction
         self._inference_fn = inference_fn
         self._separator: Any | None = None
         self._device = device
@@ -140,6 +144,8 @@ class HTDemucsProcessor(AudioProcessor):
             "segment_frames": segment_frames,
             "overlap": self.overlap,
             "shifts": self.shifts,
+            "vocal_reduction": self.vocal_reduction,
+            "vocal_gain": 1.0 - self.vocal_reduction,
             "buffered_input_packets": len(self._input_packets),
             "buffered_input_frames": self._input_frames,
             "ready_output_packets": len(self._ready_output),
@@ -169,12 +175,13 @@ class HTDemucsProcessor(AudioProcessor):
             raise RuntimeError("DEMUCS_DEVICE requests CUDA but PyTorch cannot see a GPU")
 
         logger.info(
-            "Loading Demucs model=%s device=%s segment=%.2fs overlap=%.2f shifts=%d",
+            "Loading Demucs model=%s device=%s segment=%.2fs overlap=%.2f shifts=%d vocal_reduction=%.2f",
             self.model_name,
             self._device,
             self.segment_seconds,
             self.overlap,
             self.shifts,
+            self.vocal_reduction,
         )
         self._separator = Separator(
             model=self.model_name,
@@ -186,10 +193,11 @@ class HTDemucsProcessor(AudioProcessor):
             progress=False,
         )
         logger.info(
-            "Loaded Demucs model=%s samplerate=%s channels=%s",
+            "Loaded Demucs model=%s samplerate=%s channels=%s vocal_gain=%.2f",
             self.model_name,
             self._separator.samplerate,
             self._separator.audio_channels,
+            1.0 - self.vocal_reduction,
         )
 
     def _accept_stream_format(self, packet: KanyPacket) -> None:
@@ -309,23 +317,24 @@ class HTDemucsProcessor(AudioProcessor):
             vocals = stems.get("vocals")
             if vocals is None:
                 raise RuntimeError("Demucs model did not return a vocals stem")
-            accompaniment = original - vocals
+
+            # 0.0 leaves the original mix unchanged; 1.0 removes the estimated
+            # vocal stem completely; intermediate values retain some guide vocal.
+            output = original - (vocals * self.vocal_reduction)
 
             model_rate = int(self._separator.samplerate)
             if model_rate != sample_rate:
-                accompaniment = audio_functional.resample(
-                    accompaniment, model_rate, sample_rate
-                )
+                output = audio_functional.resample(output, model_rate, sample_rate)
 
             target_frames = len(samples) // channels
-            if accompaniment.shape[-1] < target_frames:
-                accompaniment = torch.nn.functional.pad(
-                    accompaniment, (0, target_frames - accompaniment.shape[-1])
+            if output.shape[-1] < target_frames:
+                output = torch.nn.functional.pad(
+                    output, (0, target_frames - output.shape[-1])
                 )
-            accompaniment = accompaniment[..., :target_frames]
-            accompaniment = accompaniment.clamp(-1.0, 1.0)
+            output = output[..., :target_frames]
+            output = output.clamp(-1.0, 1.0)
             interleaved = (
-                accompaniment.transpose(0, 1)
+                output.transpose(0, 1)
                 .contiguous()
                 .view(-1)
                 .to(device="cpu", dtype=torch.float32)
