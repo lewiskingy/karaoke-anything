@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import asdict, replace
 import logging
 import time
 from typing import Any
@@ -13,12 +14,13 @@ logger = logging.getLogger(__name__)
 
 class TromboneService:
     def __init__(self, settings: Settings) -> None:
+        self.startup_settings = settings
         self.settings = settings
         self.metrics = Metrics(started_at=time.time())
         self.input_queue: asyncio.Queue[MediaPacket] = asyncio.Queue(
             maxsize=settings.input_queue_size
         )
-        self.processor_registry = ProcessorRegistry()
+        self.processor_registry = ProcessorRegistry(settings)
         self.processor: AudioProcessor = self.processor_registry.create(
             settings.processor
         )
@@ -91,11 +93,113 @@ class TromboneService:
             self.processor = replacement
             await old.stop()
 
+        self.settings = replace(self.settings, processor=name)
         logger.info("Processor changed from %s to %s", old.name, replacement.name)
 
     async def reset_processor(self) -> None:
         async with self._processor_lock:
             await self.processor.reset()
+
+    def runtime_settings(self) -> dict[str, object]:
+        return {
+            "processor": self.settings.processor,
+            "demucs": {
+                "model": self.settings.demucs_model,
+                "device": self.settings.demucs_device,
+                "segment_seconds": self.settings.demucs_segment_seconds,
+                "overlap": self.settings.demucs_overlap,
+                "shifts": self.settings.demucs_shifts,
+                "vocal_reduction": self.settings.demucs_vocal_reduction,
+            },
+            "startup_defaults": {
+                "processor": self.startup_settings.processor,
+                "demucs": {
+                    "model": self.startup_settings.demucs_model,
+                    "device": self.startup_settings.demucs_device,
+                    "segment_seconds": self.startup_settings.demucs_segment_seconds,
+                    "overlap": self.startup_settings.demucs_overlap,
+                    "shifts": self.startup_settings.demucs_shifts,
+                    "vocal_reduction": self.startup_settings.demucs_vocal_reduction,
+                },
+            },
+        }
+
+    async def update_runtime_settings(self, updates: dict[str, object]) -> dict[str, object]:
+        allowed = {
+            "processor",
+            "demucs_model",
+            "demucs_device",
+            "demucs_segment_seconds",
+            "demucs_overlap",
+            "demucs_shifts",
+            "demucs_vocal_reduction",
+        }
+        unknown = set(updates) - allowed
+        if unknown:
+            raise ValueError(f"Unknown runtime settings: {', '.join(sorted(unknown))}")
+
+        candidate = replace(self.settings, **updates)
+        self._validate_runtime_settings(candidate)
+
+        only_live_vocal_change = (
+            set(updates) == {"demucs_vocal_reduction"}
+            and self.processor.name == "htdemucs-vocals"
+            and hasattr(self.processor, "vocal_reduction")
+        )
+        if only_live_vocal_change:
+            self.processor.vocal_reduction = candidate.demucs_vocal_reduction  # type: ignore[attr-defined]
+            self.settings = candidate
+            logger.info(
+                "Updated live vocal reduction to %.2f",
+                candidate.demucs_vocal_reduction,
+            )
+            return {"processor_restarted": False, "applies_from": "next segment"}
+
+        registry = ProcessorRegistry(candidate)
+        replacement = registry.create(candidate.processor)
+        await replacement.start()
+
+        async with self._processor_lock:
+            old = self.processor
+            await self._flush_processor()
+            self.processor = replacement
+            self.processor_registry = registry
+            self.settings = candidate
+            await old.stop()
+
+        logger.info("Runtime settings applied; processor reinitialised")
+        return {"processor_restarted": True, "applies_from": "immediately"}
+
+    async def restore_startup_settings(self) -> dict[str, object]:
+        startup = asdict(self.startup_settings)
+        updates = {
+            key: startup[key]
+            for key in (
+                "processor",
+                "demucs_model",
+                "demucs_device",
+                "demucs_segment_seconds",
+                "demucs_overlap",
+                "demucs_shifts",
+                "demucs_vocal_reduction",
+            )
+        }
+        return await self.update_runtime_settings(updates)
+
+    @staticmethod
+    def _validate_runtime_settings(settings: Settings) -> None:
+        if not settings.processor:
+            raise ValueError("processor must not be empty")
+        if not settings.demucs_model.strip():
+            raise ValueError("demucs model must not be empty")
+        if settings.demucs_segment_seconds <= 0:
+            raise ValueError("segment_seconds must be greater than zero")
+        if not 0 <= settings.demucs_overlap < 1:
+            raise ValueError("overlap must be between 0.0 and less than 1.0")
+        if settings.demucs_shifts < 0:
+            raise ValueError("shifts must be zero or greater")
+        if not 0 <= settings.demucs_vocal_reduction <= 1:
+            raise ValueError("vocal_reduction must be between 0.0 and 1.0")
 
     async def _processing_loop(self) -> None:
         while True:
@@ -198,6 +302,7 @@ class TromboneService:
                     "can_buffer": capabilities.can_buffer,
                     "changes_payload": capabilities.changes_payload,
                 },
+                "diagnostics": self.processor.diagnostics(),
             },
             "queue": {
                 "size": self.input_queue.qsize(),
