@@ -28,6 +28,21 @@ async def collect(processor: HTDemucsProcessor, packet: MediaPacket):
     return [output async for output in processor.process(packet)]
 
 
+def test_vocal_reduction_is_reported_in_diagnostics() -> None:
+    processor = HTDemucsProcessor(vocal_reduction=0.5, inference_fn=lambda s, _r, _c: s)
+
+    diagnostics = processor.diagnostics()
+
+    assert diagnostics["vocal_reduction"] == pytest.approx(0.5)
+    assert diagnostics["vocal_gain"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_vocal_reduction_must_be_between_zero_and_one(value: float) -> None:
+    with pytest.raises(ValueError, match="vocal_reduction"):
+        HTDemucsProcessor(vocal_reduction=value)
+
+
 @pytest.mark.asyncio
 async def test_buffers_inference_and_releases_one_packet_per_input() -> None:
     def remove_everything(samples: array, sample_rate: int, channels: int) -> array:
