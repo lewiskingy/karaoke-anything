@@ -24,6 +24,7 @@
     dl { display: grid; grid-template-columns: 180px 1fr; gap: 8px; }
     dt { color: #aaa; }
     dd { margin: 0; }
+    .group { border-top: 1px solid #3a3a3a; margin-top: 18px; padding-top: 4px; }
   </style>
 </head>
 <body>
@@ -35,27 +36,41 @@
     <label for="processor">Processor</label>
     <select id="processor">
       <option value="htdemucs-vocals">HTDemucs vocals</option>
+      <option value="stereo-centre-reduction">Stereo centre reduction</option>
       <option value="passthrough">Passthrough</option>
       <option value="null">Silence</option>
     </select>
 
-    <label for="model">Demucs model</label>
-    <input id="model" type="text">
-
-    <label for="vocalReduction">Vocal reduction</label>
-    <div class="range-row">
-      <input id="vocalReduction" type="range" min="0" max="1" step="0.01">
-      <output id="vocalReductionValue"></output>
+    <div class="group">
+      <h2>Centre reduction</h2>
+      <div class="muted">Zero-lookahead mid/side processing. Changes apply from the next audio packet.</div>
+      <label for="centreReduction">Centre reduction</label>
+      <div class="range-row">
+        <input id="centreReduction" type="range" min="0" max="1" step="0.01">
+        <output id="centreReductionValue"></output>
+      </div>
     </div>
 
-    <label for="segmentSeconds">Segment length (seconds)</label>
-    <input id="segmentSeconds" type="number" min="0.1" step="0.1">
+    <div class="group">
+      <h2>Demucs</h2>
+      <label for="model">Demucs model</label>
+      <input id="model" type="text">
 
-    <label for="overlap">Overlap</label>
-    <input id="overlap" type="number" min="0" max="0.99" step="0.01">
+      <label for="vocalReduction">Vocal reduction</label>
+      <div class="range-row">
+        <input id="vocalReduction" type="range" min="0" max="1" step="0.01">
+        <output id="vocalReductionValue"></output>
+      </div>
 
-    <label for="shifts">Shifts</label>
-    <input id="shifts" type="number" min="0" step="1">
+      <label for="segmentSeconds">Segment length (seconds)</label>
+      <input id="segmentSeconds" type="number" min="0.1" step="0.1">
+
+      <label for="overlap">Overlap</label>
+      <input id="overlap" type="number" min="0" max="0.99" step="0.01">
+
+      <label for="shifts">Shifts</label>
+      <input id="shifts" type="number" min="0" step="1">
+    </div>
 
     <div class="actions">
       <button class="primary" id="apply">Apply</button>
@@ -74,26 +89,19 @@
       <dt>Last inference</dt><dd id="statusInference">-</dd>
       <dt>Real-time factor</dt><dd id="statusRtf">-</dd>
       <dt>Buffered packets</dt><dd id="statusBuffered">-</dd>
+      <dt>Lookahead</dt><dd id="statusLookahead">-</dd>
     </dl>
   </section>
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const reduction = $('vocalReduction');
-function showReduction() { $('vocalReductionValue').textContent = `${Math.round(Number(reduction.value) * 100)}%`; }
-reduction.addEventListener('input', showReduction);
+const vocalReduction = $('vocalReduction');
+const centreReduction = $('centreReduction');
+function showPercent(input, output) { output.textContent = `${Math.round(Number(input.value) * 100)}%`; }
+vocalReduction.addEventListener('input', () => showPercent(vocalReduction, $('vocalReductionValue')));
+centreReduction.addEventListener('input', () => showPercent(centreReduction, $('centreReductionValue')));
 
-async function load() {
-  const [settingsResponse, statusResponse] = await Promise.all([fetch('/api/settings'), fetch('/status')]);
-  const settings = await settingsResponse.json();
-  const status = await statusResponse.json();
-  $('processor').value = settings.processor;
-  $('model').value = settings.demucs.model;
-  reduction.value = settings.demucs.vocal_reduction;
-  $('segmentSeconds').value = settings.demucs.segment_seconds;
-  $('overlap').value = settings.demucs.overlap;
-  $('shifts').value = settings.demucs.shifts;
-  showReduction();
+function renderStatus(status) {
   const d = status.processor?.diagnostics || {};
   $('statusState').textContent = status.status;
   $('statusProcessor').textContent = status.processor?.name || '-';
@@ -101,24 +109,48 @@ async function load() {
   $('statusInference').textContent = d.last_inference_seconds == null ? '-' : `${d.last_inference_seconds.toFixed(3)} s`;
   $('statusRtf').textContent = d.last_real_time_factor == null ? '-' : d.last_real_time_factor.toFixed(3);
   $('statusBuffered').textContent = d.buffered_input_packets ?? '-';
+  $('statusLookahead').textContent = d.algorithmic_lookahead_ms == null ? '-' : `${d.algorithmic_lookahead_ms.toFixed(1)} ms`;
+}
+
+async function load() {
+  const [settingsResponse, statusResponse] = await Promise.all([fetch('/api/settings'), fetch('/status')]);
+  const settings = await settingsResponse.json();
+  const status = await statusResponse.json();
+  $('processor').value = settings.processor;
+  $('model').value = settings.demucs.model;
+  vocalReduction.value = settings.demucs.vocal_reduction;
+  centreReduction.value = settings.centre_reduction.reduction;
+  $('segmentSeconds').value = settings.demucs.segment_seconds;
+  $('overlap').value = settings.demucs.overlap;
+  $('shifts').value = settings.demucs.shifts;
+  showPercent(vocalReduction, $('vocalReductionValue'));
+  showPercent(centreReduction, $('centreReductionValue'));
+  renderStatus(status);
 }
 
 async function apply() {
   $('message').textContent = 'Applying…';
   const body = {
     processor: $('processor').value,
+    centre_reduction: { reduction: Number(centreReduction.value) },
     demucs: {
       model: $('model').value,
       segment_seconds: Number($('segmentSeconds').value),
       overlap: Number($('overlap').value),
       shifts: Number($('shifts').value),
-      vocal_reduction: Number(reduction.value)
+      vocal_reduction: Number(vocalReduction.value)
     }
   };
   const response = await fetch('/api/settings', { method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.detail || JSON.stringify(result));
-  $('message').textContent = result.processor_restarted ? 'Applied; processor reinitialised.' : 'Applied; takes effect from the next segment.';
+  if (result.status === 'unchanged') {
+    $('message').textContent = 'No settings changed.';
+  } else if (result.processor_restarted) {
+    $('message').textContent = 'Applied; processor reinitialised.';
+  } else {
+    $('message').textContent = `Applied; takes effect from the ${result.applies_from || 'next audio unit'}.`;
+  }
   await load();
 }
 
@@ -135,15 +167,7 @@ $('restore').addEventListener('click', async () => {
 });
 $('refresh').addEventListener('click', () => load().catch(e => $('message').textContent = e.message));
 load().catch(e => $('message').textContent = e.message);
-setInterval(() => fetch('/status').then(r => r.json()).then(status => {
-  const d = status.processor?.diagnostics || {};
-  $('statusState').textContent = status.status;
-  $('statusProcessor').textContent = status.processor?.name || '-';
-  $('statusDevice').textContent = d.device || '-';
-  $('statusInference').textContent = d.last_inference_seconds == null ? '-' : `${d.last_inference_seconds.toFixed(3)} s`;
-  $('statusRtf').textContent = d.last_real_time_factor == null ? '-' : d.last_real_time_factor.toFixed(3);
-  $('statusBuffered').textContent = d.buffered_input_packets ?? '-';
-}).catch(() => {}), 3000);
+setInterval(() => fetch('/status').then(r => r.json()).then(renderStatus).catch(() => {}), 3000);
 </script>
 </body>
 </html>
