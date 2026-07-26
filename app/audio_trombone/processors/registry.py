@@ -12,7 +12,7 @@ ProcessorFactory = Callable[[], AudioProcessor]
 
 class ProcessorRegistry:
     def __init__(self, settings: Settings | None = None) -> None:
-        settings = settings or Settings()
+        settings = settings or Settings.from_environment()
         self._factories: dict[str, ProcessorFactory] = {
             "passthrough": PassthroughProcessor,
             "delay-passthrough": lambda: DelayPassthroughProcessor(delay_ms=5.0),
