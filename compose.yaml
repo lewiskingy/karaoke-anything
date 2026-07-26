@@ -1,0 +1,25 @@
+services:
+  karaoke-anything:
+    build:
+      context: .
+    container_name: karaoke-anything
+    restart: unless-stopped
+
+    environment:
+      LISTEN_HOST: "0.0.0.0"
+      INPUT_PORT: "5004"
+      OUTPUT_PORT: "5006"
+
+      HTTP_HOST: "0.0.0.0"
+      HTTP_PORT: "8080"
+      LOG_LEVEL: "INFO"
+
+      PROCESSOR: "passthrough"
+      INPUT_QUEUE_SIZE: "512"
+
+      # Optional fixed destination. Otherwise use the sender's IP address.
+      # RETURN_HOST: "192.168.1.50"
+
+    ports:
+      - "8080:8080/tcp"
+      - "5004:5004/udp"
