@@ -53,7 +53,51 @@ Default ports:
 
 By default, returned packets are sent to the IP address from which each packet arrived. Set `RETURN_HOST` in `compose.yaml` to force a fixed client address.
 
-No GPU configuration is required for passthrough.
+No GPU configuration is required for passthrough or stereo-centre reduction.
+
+## GPU Demucs deployment
+
+HTDemucs uses the GPU-specific Compose override and `Dockerfile.demucs`:
+
+```bash
+docker compose \
+  -f compose.yaml \
+  -f compose.demucs.yaml \
+  up -d --build
+```
+
+The Demucs image deliberately uses CUDA 12.8 with PyTorch and torchaudio 2.7.1 from the `cu128` wheel index. This is required for NVIDIA Blackwell GPUs such as the GeForce RTX 5070 Ti (`sm_120`). Do not downgrade this image to PyTorch 2.4/CUDA 12.4: those binaries do not contain kernels for `sm_120` and fail at runtime with `CUDA error: no kernel image is available for execution on the device`.
+
+After changing the GPU image or PyTorch versions, force a clean rebuild so Docker cannot reuse an incompatible layer:
+
+```bash
+docker compose \
+  -f compose.yaml \
+  -f compose.demucs.yaml \
+  down
+
+docker compose \
+  -f compose.yaml \
+  -f compose.demucs.yaml \
+  build --no-cache
+
+docker compose \
+  -f compose.yaml \
+  -f compose.demucs.yaml \
+  up -d
+```
+
+Verify the installed build and GPU architecture inside the running container:
+
+```bash
+docker compose \
+  -f compose.yaml \
+  -f compose.demucs.yaml \
+  exec karaoke-anything python3 -c \
+  "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0), torch.cuda.get_arch_list())"
+```
+
+For an RTX 5070 Ti, the architecture list must include `sm_120`.
 
 ## Windows client setup
 
