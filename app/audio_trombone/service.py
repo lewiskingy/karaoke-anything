@@ -5,7 +5,7 @@ from typing import Any
 
 from audio_trombone.config import Settings
 from audio_trombone.models import MediaPacket, Metrics, ProcessedPacket
-from audio_trombone.processors import MediaProcessor, ProcessorRegistry
+from audio_trombone.processors import AudioProcessor, ProcessorRegistry
 from audio_trombone.transport import UdpIngressProtocol
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class TromboneService:
             maxsize=settings.input_queue_size
         )
         self.processor_registry = ProcessorRegistry()
-        self.processor: MediaProcessor = self.processor_registry.create(
+        self.processor: AudioProcessor = self.processor_registry.create(
             settings.processor
         )
         self.transport: asyncio.DatagramTransport | None = None
@@ -46,7 +46,7 @@ class TromboneService:
         self.protocol = protocol  # type: ignore[assignment]
         self.worker_task = asyncio.create_task(
             self._processing_loop(),
-            name="media-processing-loop",
+            name="audio-processing-loop",
         )
         self._running = True
         logger.info(

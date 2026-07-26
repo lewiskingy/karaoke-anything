@@ -1,33 +1,38 @@
 # Karaoke Anything
 
-A containerised streaming-audio service designed to turn arbitrary audio sources into karaoke.
+A containerised streaming-audio system designed to turn arbitrary audio sources into karaoke.
 
-The initial implementation establishes a reliable network passthrough and a pluggable processor lifecycle before any source-separation model is introduced.
+The current implementation proves end-to-end audio transport before any source-separation model is introduced:
 
 ```text
-UDP ingress
-  -> bounded queue
-  -> selected MediaProcessor
-  -> UDP egress
+Application audio
+  -> virtual audio cable
+  -> Rust capture client
+  -> UDP PCM datagrams
+  -> Python server
+  -> selected AudioProcessor
+  -> UDP PCM datagrams
+  -> Rust playback client
+  -> physical output device
 ```
 
-With the default `passthrough` processor, every UDP payload is returned byte-for-byte. There is no decoding, resampling, codec conversion or GPU use.
+With the server's default `passthrough` processor, each UDP datagram is returned byte-for-byte. There is no server-side decoding, resampling, codec conversion or GPU use.
 
-## Current scope
+## Repository contents
 
-- Single-client UDP transport on a trusted home LAN
-- Configurable return host and output port
-- Bounded ingress queue
-- Pluggable asynchronous processor interface
-- Passthrough, delayed-passthrough and null development processors
-- Runtime processor selection and reset
-- Health, status and Prometheus-style metrics endpoints
-- Container and Docker Compose deployment
-- Processor unit tests and GitHub Actions CI
+- `app/`: Python UDP server and pluggable processor lifecycle
+- `client/`: Rust command-line capture, transport and playback client
+- `docs/architecture.md`: system architecture, boundaries and delivery phases
+- `docs/protocol.md`: version-one UDP PCM datagram format
+- `tests/`: Python processor tests
 
-## Run
+## Server deployment
+
+On the Linux server:
 
 ```bash
+git clone git@github.com:lewiskingy/karaoke-anything.git
+cd karaoke-anything
 docker compose up --build -d
 ```
 
@@ -40,17 +45,41 @@ curl http://localhost:8080/processors
 curl http://localhost:8080/metrics
 ```
 
-The default ports are:
+Default ports:
 
-- `5004/udp`: media sent from the client to the server
-- `5006/udp`: media returned by the server to the client
-- `8080/tcp`: HTTP control and observability API
+- `5004/udp`: audio sent from the client to the server
+- `5006/udp`: audio returned to the client
+- `8080/tcp`: control and observability API
 
-By default, returned packets are sent to the IP address from which each packet arrived. Set `RETURN_HOST` to force a fixed client address.
+By default, returned packets are sent to the IP address from which each packet arrived. Set `RETURN_HOST` in `compose.yaml` to force a fixed client address.
+
+No GPU configuration is required for passthrough.
+
+## Windows client setup
+
+1. Install VB-CABLE and reboot Windows.
+2. Route Spotify, OpenKJ, a browser or another source application to `CABLE Input`.
+3. Install Rust using `rustup`.
+4. List available devices:
+
+```powershell
+cd client
+cargo run --release -- devices
+```
+
+5. Start the client, selecting `CABLE Output` for capture and your physical output device for playback:
+
+```powershell
+cargo run --release -- --server SERVER_LAN_IP:5004 --receive-port 5006 --capture "CABLE Output" --playback "Speakers"
+```
+
+Device names are matched using case-insensitive substrings and must identify exactly one device.
+
+See `client/README.md` for current format constraints and diagnostics.
 
 ## Processor selection
 
-The production-safe default is configured in Compose:
+The default is configured in Compose:
 
 ```yaml
 PROCESSOR: "passthrough"
@@ -64,29 +93,15 @@ curl -X PUT http://localhost:8080/processor/delay-passthrough
 curl -X PUT http://localhost:8080/processor/null
 ```
 
-Reset state after a seek, track change or reconnect:
+Reset processor state after a seek, track change or reconnect:
 
 ```bash
 curl -X POST http://localhost:8080/processor/reset
 ```
 
-## Transport test
-
-On the client machine, start the receiver:
-
-```bash
-python test_udp.py receive --port 5006
-```
-
-Then send packets through the server:
-
-```bash
-python test_udp.py send --server SERVER_LAN_IP --port 5004
-```
-
-With `passthrough`, received payloads must match the transmitted payloads exactly.
-
 ## Development
+
+### Server
 
 ```bash
 python -m venv .venv
@@ -95,40 +110,30 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-On Windows PowerShell:
+### Client
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
-pytest
+```bash
+cd client
+cargo fmt --check
+cargo test
+cargo build --release
 ```
 
 ## Model insertion point
 
-A processor can emit zero, one or many output packets per input packet:
-
-```python
-async def process(
-    self,
-    packet: MediaPacket,
-) -> AsyncIterator[ProcessedPacket]:
-    ...
-```
-
-This provides lifecycle and buffering semantics for causal and windowed processors. The next significant iteration should introduce the explicit audio boundary needed by a real source separator:
+`AudioProcessor` currently receives opaque packet payloads so passthrough remains byte-identical. Before integrating a separator, the server should introduce an explicit protocol and PCM-frame boundary:
 
 ```text
-RTP/UDP packet
-  -> RTP parsing and ordering
+UDP datagram
+  -> protocol validation and sequencing
   -> timestamped PCM frames
   -> AudioFrameProcessor
-  -> PCM packetisation
-  -> RTP/UDP output
+  -> packetisation
+  -> UDP datagram
 ```
 
-The current `MediaProcessor` therefore provides the service extension structure while intentionally treating network payloads as opaque bytes.
+This keeps networking, audio framing and model inference separate. See `docs/architecture.md` for the detailed design.
 
 ## Security boundary
 
-This version is intended for a trusted home LAN. It is single-session and unauthenticated. Do not expose its ports through an internet router.
+This version is intended for a trusted home LAN. UDP media and HTTP control endpoints are unauthenticated and unencrypted. Do not expose the service directly to the internet.

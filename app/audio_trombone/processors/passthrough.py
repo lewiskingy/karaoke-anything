@@ -1,10 +1,10 @@
 from typing import AsyncIterator
 
 from audio_trombone.models import MediaPacket, ProcessedPacket
-from audio_trombone.processors.base import MediaProcessor, ProcessorCapabilities
+from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities
 
 
-class PassthroughProcessor(MediaProcessor):
+class PassthroughProcessor(AudioProcessor):
     name = "passthrough"
     description = "Returns each incoming UDP payload byte-for-byte."
     capabilities = ProcessorCapabilities(

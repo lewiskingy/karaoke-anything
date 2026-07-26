@@ -1,10 +1,10 @@
 from typing import AsyncIterator
 
 from audio_trombone.models import MediaPacket, ProcessedPacket
-from audio_trombone.processors.base import MediaProcessor, ProcessorCapabilities
+from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities
 
 
-class NullProcessor(MediaProcessor):
+class NullProcessor(AudioProcessor):
     name = "null"
     description = "Consumes packets and emits no media."
     capabilities = ProcessorCapabilities(
