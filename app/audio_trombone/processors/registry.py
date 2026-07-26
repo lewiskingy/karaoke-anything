@@ -23,6 +23,7 @@ class ProcessorRegistry:
                 segment_seconds=settings.demucs_segment_seconds,
                 overlap=settings.demucs_overlap,
                 shifts=settings.demucs_shifts,
+                vocal_reduction=settings.demucs_vocal_reduction,
             ),
         }
 
