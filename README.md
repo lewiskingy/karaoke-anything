@@ -101,6 +101,21 @@ The GPU image deliberately uses CUDA 12.8 with PyTorch and torchaudio 2.7.1 from
 
 The image downloads `cadenzachallenge/ConvTasNet_Lyrics_Causal` during build and verifies that the matching vendored Clarity `ConvTasNetStereo` architecture can load it offline. For reproducible deployment, pin `CONVTASNET_MODEL_REVISION` to a Hugging Face commit instead of `main`.
 
+The image also downloads only the pinned MDX23C 8KFFT YAML and checkpoint into
+`/models/mdx23c`, copies the pinned upstream MDX23C architecture module, and
+strictly loads the checkpoint on CPU during the build. This is a Stage 0
+compatibility proof only; MDX23C is not registered as a processor. Repeat the
+proof offline after building with:
+
+```bash
+docker compose -f compose.yaml -f compose.demucs.yaml run --rm --no-deps \
+  karaoke-anything \
+  python3 -m audio_trombone.tools.validate_mdx23c
+```
+
+Asset paths, upstream revisions, failure testing and remaining Stage 0 limits
+are recorded in `docs/mdx23c-stage-0.md`.
+
 After changing the GPU image, model revision or Python dependency versions, force a clean rebuild:
 
 ```bash

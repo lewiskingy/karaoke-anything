@@ -44,6 +44,15 @@ Prefer the current `ZFTurbo/Music-Source-Separation-Training` implementation as 
 
 The older `ZFTurbo/mvsep-mdx23-music-separation-model` repository may be useful historical context, but it is an ensemble/competition solution and is not the preferred dependency or runtime embedding boundary.
 
+The Stage 0 build uses `models/mdx23c_tfc_tdf_v3.py` from
+`ZFTurbo/Music-Source-Separation-Training` at commit
+`0d7b3c47656f07c0f4f17b41b61593a4e32fdc88`. The build copies that one
+architecture module and the upstream licence into the image; it does not copy the
+training repository. This revision was selected because it is the immutable
+snapshot of the current upstream MDX23C v3 construction used to verify the
+selected 8KFFT YAML/checkpoint pair. `einops` and `rotary-embedding-torch` are the
+only architecture-specific packages added; PyYAML parses the model config.
+
 Stage 0 may do one of the following:
 
 1. vendor the minimal MDX23C architecture/config-loader surface required to construct and load this checkpoint; or
@@ -176,3 +185,58 @@ The implementation report or pull-request description should include:
 ## Next stage
 
 Only after Stage 0 is proven should Stage 1 be planned. Stage 1 will establish a small offline inference adapter against a short fixture, including input tensor shape, required sample rate, output shape, target ordering and deterministic numerical sanity checks. It still need not integrate KANY or runtime controls.
+
+## Reproducing the proof
+
+Build from an empty Docker layer cache so both pinned model assets and the pinned
+architecture source are acquired again:
+
+```bash
+docker compose -f compose.yaml -f compose.demucs.yaml build --no-cache
+```
+
+The image build invokes the repository-owned validator automatically and fails
+if asset acquisition, YAML parsing, model construction, or strict checkpoint
+loading fails. Repeat the same proof from the resulting image with networking
+disabled:
+
+```bash
+docker compose -f compose.yaml -f compose.demucs.yaml run --rm --no-deps \
+  karaoke-anything \
+  python3 -m audio_trombone.tools.validate_mdx23c
+```
+
+Successful output has this form (the values are read from the baked YAML and
+constructed model rather than constants in the validator):
+
+```text
+MDX23C checkpoint validation
+config: /models/mdx23c/model_2_stem_full_band_8k.yaml
+checkpoint: /models/mdx23c/MDX23C-8KFFT-InstVoc_HQ.ckpt
+model: audio_trombone.vendor.mdx23c_tfc_tdf_v3.TFC_TDF_net
+parameters: <parameter count from the constructed model>
+sample_rate: <sample rate from the YAML>
+targets: <instrument names from the YAML>
+strict checkpoint load: OK
+```
+
+A missing-asset negative test is reproducible without modifying the image:
+
+```bash
+docker compose -f compose.yaml -f compose.demucs.yaml run --rm --no-deps \
+  karaoke-anything \
+  python3 -m audio_trombone.tools.validate_mdx23c \
+    --checkpoint /models/mdx23c/does-not-exist.ckpt
+```
+
+It exits non-zero with `FileNotFoundError`; malformed, ambiguous, mixed-prefix,
+missing-key, and unexpected-key checkpoints also exit non-zero. The validator
+supports only raw state dictionaries and the observed/documented `state_dict` or
+`model` wrappers, plus a uniform `module.` prefix. The final model load always
+uses `strict=True`.
+
+Stage 0 performs CPU construction and checkpoint loading only. GPU execution,
+audio inference, stem semantics, quality, latency, real-time factor and VRAM
+remain deliberately unverified until later stages. No processor, processor
+registry entry, runtime API setting, Compose runtime setting, or UI control is
+introduced here.
