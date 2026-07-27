@@ -83,6 +83,7 @@ The registry is the authoritative mapping from stable processor names to constru
 - `stereo-centre-reduction`: zero-lookahead mid/side vocal reduction;
 - `htdemucs-vocals`: buffered HTDemucs vocal reduction;
 - `convtasnet-lyrics-causal`: buffered finite-segment execution of the causal Cadenza lyrics/accompaniment model.
+- `mdx23c-vocals`: bounded finite-window, explicitly non-causal MDX23C separation with paced packet reconstruction.
 
 A model under investigation is not registered until its architecture/checkpoint compatibility and its processor contract have been proven at the appropriate delivery stage.
 
