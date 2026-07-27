@@ -8,7 +8,7 @@ services:
         CONVTASNET_MODEL_REVISION: "${CONVTASNET_MODEL_REVISION:-main}"
         MDX23C_MODEL_REPO: "Politrees/UVR_resources"
         MDX23C_MODEL_REVISION: "0472e5cd4e0f77b95ca2df7a8162992e6799fa49"
-        MDX23C_ARCH_REVISION: "0d7b3c47656f07c0f4f17b41b61593a4e32fdc88"
+        MDX23C_ARCH_REVISION: "83d495dfc81b2ede9bc62f4209619f8bdfd14995"
     environment:
       PROCESSOR: "${PROCESSOR:-htdemucs-vocals}"
       DEMUCS_MODEL: "${DEMUCS_MODEL:-htdemucs}"
