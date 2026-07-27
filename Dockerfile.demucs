@@ -2,6 +2,10 @@ FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 ARG CONVTASNET_MODEL_REPO=cadenzachallenge/ConvTasNet_Lyrics_Causal
 ARG CONVTASNET_MODEL_REVISION=main
+ARG MDX23C_MODEL_REPO=Politrees/UVR_resources
+ARG MDX23C_MODEL_REVISION=0472e5cd4e0f77b95ca2df7a8162992e6799fa49
+# Upstream MDX23C implementation snapshot; override only with another reviewed commit.
+ARG MDX23C_ARCH_REVISION=0d7b3c47656f07c0f4f17b41b61593a4e32fdc88
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -31,12 +35,26 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirement
         torchaudio==2.7.1 \
     && python3 -m pip install --break-system-packages --no-cache-dir -r requirements-demucs.txt
 
-RUN mkdir -p /models/torch /models/convtasnet-lyrics-causal \
+RUN mkdir -p /models/torch /models/convtasnet-lyrics-causal /models/mdx23c \
     && python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${CONVTASNET_MODEL_REPO}', revision='${CONVTASNET_MODEL_REVISION}', local_dir='/models/convtasnet-lyrics-causal')"
+
+RUN python3 -c "from huggingface_hub import hf_hub_download; [hf_hub_download(repo_id='${MDX23C_MODEL_REPO}', revision='${MDX23C_MODEL_REVISION}', filename='MDX23C_models/' + name, local_dir='/models/mdx23c/.download') for name in ('MDX23C-8KFFT-InstVoc_HQ.ckpt', 'model_2_stem_full_band_8k.yaml')]" \
+    && mv /models/mdx23c/.download/MDX23C_models/* /models/mdx23c/ \
+    && rm -rf /models/mdx23c/.download
 
 COPY app ./app
 
+# Vendor only the architecture module used for construction, not the training repository.
+RUN curl --fail --location --silent --show-error \
+      "https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/${MDX23C_ARCH_REVISION}/models/mdx23c_tfc_tdf_v3.py" \
+      --output app/audio_trombone/vendor/mdx23c_tfc_tdf_v3.py \
+    && curl --fail --location --silent --show-error \
+      "https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/${MDX23C_ARCH_REVISION}/LICENSE" \
+      --output app/audio_trombone/vendor/LICENSE.music-source-separation-training
+
 RUN python3 -c "from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo; model = ConvTasNetStereo.from_pretrained('/models/convtasnet-lyrics-causal', local_files_only=True); print('ConvTasNet model loaded', model.samplerate, model.audio_channels, model.C)"
+
+RUN HF_HUB_OFFLINE=1 python3 -m audio_trombone.tools.validate_mdx23c
 
 EXPOSE 8080/tcp
 EXPOSE 5004/udp
