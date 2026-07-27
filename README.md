@@ -1,31 +1,57 @@
 # Karaoke Anything
 
-A containerised streaming-audio system designed to turn arbitrary audio sources into karaoke.
+A containerised low-latency streaming-audio system designed to turn arbitrary desktop audio sources into karaoke.
 
-The current implementation proves end-to-end audio transport before any source-separation model is introduced:
+The repository now contains a proven end-to-end KANY PCM transport, runtime-selectable audio processors, a web control surface, and two experimental GPU separator integrations:
 
 ```text
 Application audio
   -> virtual audio cable
   -> Rust capture client
-  -> UDP PCM datagrams
+  -> KANY v1 UDP PCM datagrams
   -> Python server
   -> selected AudioProcessor
-  -> UDP PCM datagrams
+  -> paced KANY v1 UDP PCM datagrams
   -> Rust playback client
   -> physical output device
 ```
 
-With the server's default `passthrough` processor, each UDP datagram is returned byte-for-byte. There is no server-side decoding, resampling, codec conversion or GPU use.
+`passthrough` remains the permanent transport baseline. Model processors are intentionally replaceable and must preserve the same processor lifecycle, bounded-buffer behaviour and control-plane contracts.
+
+## Contributor entry points
+
+Before making changes, read:
+
+- `AGENTS.md`: contributor rules, architectural boundaries and model-delivery stages
+- `docs/architecture.md`: current system architecture and ownership boundaries
+- `docs/protocol.md`: KANY v1 UDP PCM contract
+- `docs/convtasnet-lyrics-causal.md`: ConvTasNet implementation, provenance and limitations
+- `docs/mdx23c-stage-0.md`: tightly scoped MDX23C checkpoint-load proof
+
+Documentation is part of the implementation. Behaviour, configuration, model provenance and validation evidence must be updated in the same change as code.
 
 ## Repository contents
 
-- `app/`: Python UDP server and pluggable processor lifecycle
+- `app/`: Python UDP server, processor lifecycle, runtime settings API and console
 - `client/`: Rust command-line capture, transport and playback client
-- `docs/architecture.md`: system architecture, boundaries and delivery phases
-- `docs/protocol.md`: version-one UDP PCM datagram format
-- `docs/convtasnet-lyrics-causal.md`: causal Conv-TasNet model integration and validation
-- `tests/`: Python processor tests
+- `docs/architecture.md`: system architecture, boundaries and delivery model
+- `docs/protocol.md`: KANY v1 UDP PCM datagram format
+- `docs/convtasnet-lyrics-causal.md`: causal ConvTasNet integration and validation
+- `docs/mdx23c-stage-0.md`: MDX23C Stage 0 scope and acceptance criteria
+- `tests/`: Python processor and runtime-settings tests
+
+## Current processors
+
+| Processor | Purpose | GPU/model requirement |
+|---|---|---|
+| `passthrough` | Byte-preserving transport baseline | None |
+| `delay-passthrough` | Artificial delay for queue/timing tests | None |
+| `null` | Emits no output for failure/timeout tests | None |
+| `stereo-centre-reduction` | Zero-lookahead mid/side vocal reduction | None |
+| `htdemucs-vocals` | Buffered HTDemucs vocal reduction | GPU image recommended |
+| `convtasnet-lyrics-causal` | Buffered finite-segment causal lyrics/accompaniment separation | GPU image recommended |
+
+MDX23C is **not yet a processor**. The current branch task is Stage 0 only: prove that one pinned YAML/checkpoint pair can be acquired, constructed and loaded strictly and offline. See `docs/mdx23c-stage-0.md`.
 
 ## Server deployment
 
@@ -50,15 +76,15 @@ Default ports:
 
 - `5004/udp`: audio sent from the client to the server
 - `5006/udp`: audio returned to the client
-- `8080/tcp`: control and observability API
+- `8080/tcp`: control and observability API and web console
 
-By default, returned packets are sent to the IP address from which each packet arrived. Set `RETURN_HOST` in `compose.yaml` to force a fixed client address.
+By default, returned packets are sent to the source IP of each received packet. Set `RETURN_HOST` to force a fixed client address.
 
-No GPU configuration is required for passthrough or stereo-centre reduction.
+No GPU configuration is required for passthrough, delay, null or stereo-centre reduction.
 
 ## GPU model deployment
 
-HTDemucs and the causal Cadenza Conv-TasNet processor use the GPU-specific Compose override and `Dockerfile.demucs`:
+HTDemucs and the causal Cadenza ConvTasNet processor use the GPU-specific Compose override and `Dockerfile.demucs`:
 
 ```bash
 docker compose \
@@ -67,13 +93,15 @@ docker compose \
   up -d --build
 ```
 
+The filename `Dockerfile.demucs` is historical: the image now contains the shared GPU runtime and more than one model family. Do not rename it as part of an unrelated processor change.
+
 The GPU image deliberately uses CUDA 12.8 with PyTorch and torchaudio 2.7.1 from the `cu128` wheel index. This is required for NVIDIA Blackwell GPUs such as the GeForce RTX 5070 Ti (`sm_120`). Do not downgrade this image to PyTorch 2.4/CUDA 12.4: those binaries do not contain kernels for `sm_120` and fail at runtime with `CUDA error: no kernel image is available for execution on the device`.
 
 `requirements-demucs.txt` also pins NumPy explicitly because Demucs imports it during application startup. Do not add a conflicting torchaudio pin there: torch and torchaudio are installed together from the CUDA 12.8 wheel index by `Dockerfile.demucs`.
 
-The image also downloads `cadenzachallenge/ConvTasNet_Lyrics_Causal` during the build and verifies that the corresponding Clarity `ConvTasNetStereo` architecture can load it offline. For reproducible deployment, set `CONVTASNET_MODEL_REVISION` to a Hugging Face commit rather than leaving it at `main`.
+The image downloads `cadenzachallenge/ConvTasNet_Lyrics_Causal` during build and verifies that the matching vendored Clarity `ConvTasNetStereo` architecture can load it offline. For reproducible deployment, pin `CONVTASNET_MODEL_REVISION` to a Hugging Face commit instead of `main`.
 
-After changing the GPU image, model revision or Python dependency versions, force a clean rebuild so Docker cannot reuse an incompatible layer:
+After changing the GPU image, model revision or Python dependency versions, force a clean rebuild:
 
 ```bash
 docker compose \
@@ -92,7 +120,7 @@ docker compose \
   up -d
 ```
 
-Verify the installed build and dependencies inside the running container:
+Verify the installed build and GPU support inside the running container:
 
 ```bash
 docker compose \
@@ -116,7 +144,7 @@ cd client
 cargo run --release -- devices
 ```
 
-5. Start the client, selecting `CABLE Output` for capture and your physical output device for playback:
+5. Start the client, selecting `CABLE Output` for capture and a physical output device for playback:
 
 ```powershell
 cargo run --release -- --server SERVER_LAN_IP:5004 --receive-port 5006 --capture "CABLE Output" --playback "Speakers"
@@ -126,9 +154,9 @@ Device names are matched using case-insensitive substrings and must identify exa
 
 See `client/README.md` for current format constraints and diagnostics.
 
-## Processor selection
+## Processor selection and runtime control
 
-The default is configured in Compose:
+The startup processor is configured by Compose/environment:
 
 ```yaml
 PROCESSOR: "passthrough"
@@ -140,11 +168,20 @@ Processors can also be selected at runtime:
 curl -X PUT http://localhost:8080/processor/passthrough
 curl -X PUT http://localhost:8080/processor/delay-passthrough
 curl -X PUT http://localhost:8080/processor/null
+curl -X PUT http://localhost:8080/processor/stereo-centre-reduction
 curl -X PUT http://localhost:8080/processor/htdemucs-vocals
 curl -X PUT http://localhost:8080/processor/convtasnet-lyrics-causal
 ```
 
-To start directly with the causal Conv-TasNet processor:
+The web console is available at:
+
+```text
+http://SERVER_LAN_IP:8080/
+```
+
+`GET /api/settings` returns current and startup-default settings. `PATCH /api/settings` changes the running process only. `DELETE /api/settings` restores the startup defaults read from Compose/environment. Restarting the container always restores those startup defaults.
+
+To start directly with ConvTasNet:
 
 ```bash
 PROCESSOR=convtasnet-lyrics-causal \
@@ -153,13 +190,23 @@ CONVTASNET_VOCAL_REDUCTION=1.0 \
 docker compose -f compose.yaml -f compose.demucs.yaml up -d --build
 ```
 
-See `docs/convtasnet-lyrics-causal.md` for configuration, provenance, source-index validation and current limitations.
-
 Reset processor state after a seek, track change or reconnect:
 
 ```bash
 curl -X POST http://localhost:8080/processor/reset
 ```
+
+## Model-integration policy
+
+New model families are introduced in stages. When checkpoint compatibility is uncertain, do not begin with an `AudioProcessor` implementation.
+
+0. Prove pinned asset acquisition, architecture construction and strict offline checkpoint loading.
+1. Prove offline inference shapes, sample rate and stem semantics against a short fixture.
+2. Integrate bounded buffering, packet reconstruction, pacing and lifecycle.
+3. Add runtime settings API and console controls.
+4. Validate latency, RTF, VRAM, quality and discontinuity behaviour on the target host.
+
+See `AGENTS.md` for the rules and `docs/mdx23c-stage-0.md` for the current MDX23C scope.
 
 ## Development
 
@@ -180,21 +227,6 @@ cargo fmt --check
 cargo test
 cargo build --release
 ```
-
-## Model insertion point
-
-`AudioProcessor` currently receives opaque packet payloads so passthrough remains byte-identical. Before integrating a separator, the server should introduce an explicit protocol and PCM-frame boundary:
-
-```text
-UDP datagram
-  -> protocol validation and sequencing
-  -> timestamped PCM frames
-  -> AudioFrameProcessor
-  -> packetisation
-  -> UDP datagram
-```
-
-This keeps networking, audio framing and model inference separate. See `docs/architecture.md` for the detailed design.
 
 ## Security boundary
 
