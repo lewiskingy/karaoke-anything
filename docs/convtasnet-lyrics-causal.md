@@ -4,7 +4,7 @@
 
 `convtasnet-lyrics-causal` is an experimental GPU processor for low-latency karaoke vocal reduction. It uses the pretrained Cadenza model `cadenzachallenge/ConvTasNet_Lyrics_Causal` and the matching `ConvTasNetStereo` architecture from the Clarity Challenge repository.
 
-The model is causal and trained for stereo lyrics/accompaniment separation at 44.1 kHz. This first integration still uses bounded segment buffering so it can share the proven KANY packet lifecycle and paced output behaviour already used by the HTDemucs processor. Once performance and source ordering are validated, the segment size can be reduced and a genuinely stateful streaming execution path can be considered.
+The model is causal and trained for stereo lyrics/accompaniment separation at 44.1 kHz. This integration still uses bounded segment buffering so it can share the proven KANY packet lifecycle and paced output behaviour already used by the HTDemucs processor. Once performance and source ordering are validated, the segment size can be reduced and a genuinely stateful streaming execution path can be considered.
 
 ## Model and architecture provenance
 
@@ -12,7 +12,7 @@ The model is causal and trained for stereo lyrics/accompaniment separation at 44
 - Architecture source: `claritychallenge/clarity`, file `recipes/cad2/task1/ConvTasNet/local/tasnet.py`, commit `9df6486fb0bddc7619b3b99f1b3a5c72c109a3ec`.
 - The minimal inference architecture is vendored in `app/audio_trombone/vendor/clarity_tasnet.py` with attribution and the original MIT notice.
 
-The Docker build downloads the complete Hugging Face snapshot and then performs an offline model-load smoke test. Runtime model loading uses `local_files_only=True` and therefore does not require network access.
+The Docker build downloads the complete Hugging Face snapshot and performs an offline model-load smoke test. Runtime model loading uses `local_files_only=True` and therefore does not require network access.
 
 ## Selecting the processor
 
@@ -23,14 +23,16 @@ CONVTASNET_VOCAL_REDUCTION=1.0 \
 docker compose -f compose.yaml -f compose.demucs.yaml up -d --build
 ```
 
-The GPU image is still named `Dockerfile.demucs` for compatibility, but it now contains both Demucs and Conv-TasNet dependencies and model assets.
+The GPU image is still named `Dockerfile.demucs` for compatibility, but it contains both Demucs and ConvTasNet dependencies and model assets.
+
+The processor can also be selected and configured from the runtime console at `http://SERVER:8080/` or through `/api/settings`.
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---:|---|
 | `CONVTASNET_MODEL_REPO` | `cadenzachallenge/ConvTasNet_Lyrics_Causal` | Hugging Face model repository downloaded during image build. |
-| `CONVTASNET_MODEL_REVISION` | `main` | Build-time Hugging Face revision. Pin this to a commit for reproducible production builds. |
+| `CONVTASNET_MODEL_REVISION` | `main` | Build-time Hugging Face revision. Pin this to a commit for reproducible deployment. |
 | `CONVTASNET_MODEL_PATH` | `/models/convtasnet-lyrics-causal` | Local runtime model directory. |
 | `CONVTASNET_DEVICE` | `auto` | `auto`, `cpu`, `cuda`, or a specific CUDA device. |
 | `CONVTASNET_SEGMENT_SECONDS` | `1.0` | Initial packet buffer duration before inference. |
@@ -38,7 +40,9 @@ The GPU image is still named `Dockerfile.demucs` for compatibility, but it now c
 | `CONVTASNET_VOCAL_SOURCE_INDEX` | `0` | Model output index assumed to contain lyrics/vocals. |
 | `CONVTASNET_ACCOMPANIMENT_SOURCE_INDEX` | `1` | Model output index assumed to contain accompaniment. |
 
-The source indexes are configurable because the published model must be validated against real audio before their semantic order is treated as final.
+The source indexes are configurable because the published model must be validated against real audio before their semantic order is treated as final. They must be different.
+
+Runtime changes are ephemeral. Compose/environment values remain startup defaults and return after container restart. Changing only ConvTasNet vocal reduction can apply live to the active processor; changing model path, device, segment length or source indexes reinitialises the processor.
 
 ## Audio behaviour
 
@@ -70,13 +74,14 @@ docker compose -f compose.yaml -f compose.demucs.yaml run --rm karaoke-anything 
   python3 -c "from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo; m=ConvTasNetStereo.from_pretrained('/models/convtasnet-lyrics-causal', local_files_only=True); print(m.samplerate, m.audio_channels, m.C, m.causal, m.norm_type)"
 ```
 
-Start with the new processor and inspect diagnostics:
+Start with the processor and inspect diagnostics:
 
 ```bash
 PROCESSOR=convtasnet-lyrics-causal \
 docker compose -f compose.yaml -f compose.demucs.yaml up -d
 
 curl http://localhost:8080/status
+curl http://localhost:8080/api/settings
 ```
 
 Confirm:
@@ -86,14 +91,14 @@ Confirm:
 - vocals are reduced rather than accompaniment;
 - stereo orientation is preserved;
 - there are no discontinuities at segment boundaries;
-- reset works after seeks and track changes.
+- reset works after seeks and track changes;
+- runtime controls return the expected current and startup-default values.
 
-If the model outputs are reversed, swap the two source-index variables. If the result is unstable at one second, increase `CONVTASNET_SEGMENT_SECONDS`; if performance has ample margin, reduce it gradually.
+If the model outputs are reversed, swap the two source-index values. If the result is unstable at one second, increase `CONVTASNET_SEGMENT_SECONDS`; if performance has ample margin, reduce it gradually.
 
 ## Current limitations
 
-- The architecture is causal, but this implementation does not yet preserve internal convolution state between calls. It runs finite causal segments.
-- The default build revision is `main`; production deployment should pin a Hugging Face commit.
-- Source ordering requires runtime validation.
-- The settings HTTP API and web UI have not yet gained model-specific editable controls; environment variables and processor selection are supported.
+- The architecture is causal, but this implementation does not preserve internal convolution state between calls. It runs finite causal segments.
+- The default build revision is `main`; deployment should pin a Hugging Face commit.
+- Source ordering still requires validation against real audio.
 - Subjective quality and true end-to-end latency must be compared with `htdemucs-vocals` on the target GPU.
