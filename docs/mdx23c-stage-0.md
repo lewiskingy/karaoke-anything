@@ -44,14 +44,24 @@ Prefer the current `ZFTurbo/Music-Source-Separation-Training` implementation as 
 
 The older `ZFTurbo/mvsep-mdx23-music-separation-model` repository may be useful historical context, but it is an ensemble/competition solution and is not the preferred dependency or runtime embedding boundary.
 
-The Stage 0 build uses `models/mdx23c_tfc_tdf_v3.py` from
-`ZFTurbo/Music-Source-Separation-Training` at commit
-`0d7b3c47656f07c0f4f17b41b61593a4e32fdc88`. The build copies that one
-architecture module and the upstream licence into the image; it does not copy the
-training repository. This revision was selected because it is the immutable
-snapshot of the current upstream MDX23C v3 construction used to verify the
-selected 8KFFT YAML/checkpoint pair. `einops` and `rotary-embedding-torch` are the
-only architecture-specific packages added; PyYAML parses the model config.
+The Stage 0 build uses `models/mdx23c_tfc_tdf_v3.py` from the repository
+`ZFTurbo/Music-Source-Separation-Training` at the immutable commit
+`83d495dfc81b2ede9bc62f4209619f8bdfd14995`. That architecture imports
+`prefer_target_instrument` from upstream `utils/model_utils.py`. The build-time
+preparation step replaces the expected import with a local function whose
+semantics exactly match that upstream helper. It deliberately does not vendor
+the rest of `utils/model_utils.py`, which would introduce unrelated training,
+optimisation, NumPy, distributed, and inference dependencies. The preparation
+fails unless the expected import occurs exactly once, preventing an unexpected
+upstream source from being accepted silently.
+
+The build downloads only the architecture module and the upstream `LICENSE` at
+that commit, storing the latter as
+`app/audio_trombone/vendor/LICENSE.music-source-separation-training` in the
+image. The architecture and copied helper semantics retain the upstream MIT
+licence attribution; the training repository itself is not copied. `einops` and
+`rotary-embedding-torch` are the only architecture-specific packages added;
+PyYAML parses the model config.
 
 Stage 0 may do one of the following:
 
