@@ -4,7 +4,7 @@
 
 Karaoke Anything is a low-latency audio-processing system that captures audio from an arbitrary desktop source, transports it to a server, applies a selectable audio-processing pipeline, and returns the resulting audio for local playback.
 
-The first end-to-end milestone deliberately performs no audible processing. It proves device routing, capture, packetisation, network transport, buffering and playback before a source-separation model is introduced.
+The system is intentionally model-agnostic. Transport, packet framing, processor lifecycle, model inference and runtime control are separate concerns so that separator implementations remain replaceable.
 
 ## System context
 
@@ -12,15 +12,15 @@ The first end-to-end milestone deliberately performs no audible processing. It p
 Application audio
   -> virtual audio cable
   -> Rust client capture
-  -> UDP PCM datagrams
+  -> KANY v1 UDP PCM datagrams
   -> Karaoke Anything server
   -> selected AudioProcessor
-  -> UDP PCM datagrams
+  -> paced KANY v1 UDP PCM datagrams
   -> Rust client jitter buffer
   -> physical playback device
 ```
 
-The intended first deployment is a Windows laptop on a trusted home LAN and a Linux Docker host with a GPU available for later model inference.
+The intended deployment is a Windows laptop on a trusted home LAN and a Linux Docker host with an NVIDIA GPU for model inference.
 
 ## Components
 
@@ -35,59 +35,83 @@ The client uses CPAL for cross-platform audio-device access. It:
 1. lists and selects capture and playback devices;
 2. captures interleaved PCM samples;
 3. normalises samples to 32-bit floating point;
-4. packetises the samples using the versioned protocol in `docs/protocol.md`;
+4. packetises samples using KANY v1 from `docs/protocol.md`;
 5. sends datagrams to the server;
 6. receives returned datagrams;
 7. places received samples into a bounded playback buffer; and
 8. renders them to the selected physical output device.
 
-The first client is a command-line application. A tray application or graphical configuration surface is a later concern.
+The client owns local device selection and playback timing. It does not load separator models or manage server-side processor settings.
 
 ### Python server
 
-The server owns UDP ingress and egress, a bounded input queue, processor lifecycle and observability endpoints.
+The server owns:
 
-The current server treats each datagram as an opaque payload and forwards it through an `AudioProcessor`. This preserves byte-for-byte passthrough while establishing lifecycle semantics required by future models:
+- UDP ingress and egress;
+- protocol-bearing media packets;
+- a bounded input queue;
+- processor lifecycle and replacement;
+- model loading and accelerator use;
+- model-required server-side buffering;
+- paced reconstruction of output packets;
+- runtime settings and startup-default restoration;
+- health, status, diagnostics and metrics;
+- the web settings console.
 
-- `start`: load a model or allocate accelerator resources;
-- `process`: accept work and emit zero, one or many outputs;
+The server does not attempt to control Windows audio routing.
+
+### Audio processor lifecycle
+
+Every processor implements a common lifecycle:
+
+- `start`: load a model or allocate resources;
+- `process`: accept one media packet and emit zero, one or many outputs;
 - `reset`: discard state after seek, reconnect or track change;
-- `flush`: emit buffered output before replacement or shutdown; and
-- `stop`: release resources.
+- `flush`: emit buffered output before replacement or shutdown where meaningful;
+- `stop`: release resources;
+- `diagnostics`: expose processor-specific status through the common status endpoint.
 
-### Audio processor registry
+Processor replacement constructs and starts the replacement before switching under the processor lock. Buffered output from the old processor is flushed before it is stopped.
 
-The registry provides named processor selection. Initially it contains:
+### Processor registry
 
-- `passthrough`: returns each datagram unchanged;
-- `delay-passthrough`: introduces a small artificial delay for queue testing; and
-- `null`: emits nothing for timeout and failover testing.
+The registry is the authoritative mapping from stable processor names to constructors. Current processors are:
+
+- `passthrough`: returns each payload unchanged;
+- `delay-passthrough`: introduces a small artificial delay for timing tests;
+- `null`: emits nothing for timeout and failover tests;
+- `stereo-centre-reduction`: zero-lookahead mid/side vocal reduction;
+- `htdemucs-vocals`: buffered HTDemucs vocal reduction;
+- `convtasnet-lyrics-causal`: buffered finite-segment execution of the causal Cadenza lyrics/accompaniment model.
+
+A model under investigation is not registered until its architecture/checkpoint compatibility and its processor contract have been proven at the appropriate delivery stage.
 
 ## Architectural boundaries
 
-### Transport and audio processing
+### Transport and model processing
 
-The current `AudioProcessor` still receives opaque datagrams. This is an intentional transitional design, not the desired model-inference boundary.
+The wire contract is KANY v1: versioned stereo float32 PCM datagrams. Model processors may decode KANY packets because they require PCM, but model-specific code must not own sockets, HTTP routes or Compose configuration.
 
-Before integrating a source separator, the server should introduce these layers:
+The effective pipeline is:
 
 ```text
 UDP datagram
-  -> protocol validation
-  -> sequencing and loss handling
-  -> timestamped PCM frames
-  -> AudioFrameProcessor pipeline
-  -> packetisation
-  -> UDP datagram
+  -> KANY protocol validation and PCM decoding
+  -> processor-owned bounded segment buffering where required
+  -> model-specific inference
+  -> output PCM validation/clamping
+  -> reconstruction using original packet boundaries
+  -> paced UDP output
 ```
 
-At that point:
+Responsibility remains split as follows:
 
-- transport code owns headers, sequencing, timing and packet loss;
-- audio-frame code owns channel layout, sample rate and PCM buffers; and
-- model adapters own only inference state and audio transformation.
+- transport code owns UDP ingress/egress, sender/destination information, queues and metrics;
+- KANY code owns packet headers, format validation and PCM encode/decode;
+- processor lifecycle code owns safe replacement, reset, flush and runtime settings;
+- model adapters own model construction, inference semantics and only the buffering required by that model.
 
-This prevents networking concerns from leaking into separator implementations.
+Do not introduce model fields into the wire protocol and do not move network concerns into model adapters.
 
 ### Client and server responsibilities
 
@@ -98,93 +122,141 @@ The client owns:
 - virtual-device routing;
 - packet creation and validation;
 - the receive jitter buffer; and
-- user-facing diagnostics.
+- client-facing device and playback diagnostics.
 
 The server owns:
 
 - processor selection and lifecycle;
 - model loading and accelerator use;
 - server-side buffering required by a model;
-- audio transformation; and
-- processing metrics.
+- audio transformation;
+- runtime model configuration; and
+- processing metrics and diagnostics.
 
-The server does not attempt to control Windows audio routing.
+### Runtime control
 
-## Latency budget
+Startup configuration is read from Compose/environment into immutable `Settings`. The running service may replace its current settings for the lifetime of the process.
 
-The target is interactive karaoke rather than offline stem production. End-to-end latency should be measured as the sum of:
+- `GET /api/settings` returns current settings and startup defaults.
+- `PATCH` or `PUT /api/settings` applies validated runtime changes.
+- `DELETE /api/settings` restores startup defaults.
+- Restarting the container restores Compose/environment values.
+
+Settings that only alter a safe mutable property of the active processor may apply live. Model path, architecture, device, segmentation or source-semantic changes normally require a new processor instance.
+
+A processor-specific setting must remain consistent across configuration, registry construction, service validation, API schemas, console controls, Compose documentation and diagnostics.
+
+### Model assets and dependencies
+
+External models and architecture code are supply-chain inputs and must be treated explicitly:
+
+- pin model revisions and architecture repositories to immutable commits where practical;
+- download model assets during image build rather than at runtime;
+- load baked assets offline at runtime;
+- fail the image build when a model cannot be constructed or loaded;
+- vendor only the minimal inference surface required, with attribution and licence notices;
+- avoid embedding complete training, GUI or competition repositories in the service;
+- do not use `strict=False` to disguise checkpoint incompatibility.
+
+The GPU image is currently named `Dockerfile.demucs` for historical compatibility, although it supports multiple model families.
+
+## Buffering and latency
+
+The target is interactive karaoke rather than offline stem production. End-to-end latency is the sum of:
 
 - capture-device buffering;
 - client packet accumulation;
 - outbound LAN transit;
 - server queueing;
-- model look-ahead and inference;
+- processor segment accumulation or model look-ahead;
+- inference duration;
+- paced output delay;
 - inbound LAN transit;
 - client jitter buffering; and
 - playback-device buffering.
 
-The passthrough milestone establishes a baseline. Model evaluation must report additional latency relative to that baseline, not only inference duration.
+`passthrough` is the permanent baseline. Model evaluation must report additional end-to-end latency relative to that baseline, as well as inference duration and real-time factor.
+
+Finite-window processors currently collect bounded segments and run inference asynchronously. Output is reconstructed according to the original packet boundaries and released at the client's natural packet cadence rather than in a burst.
+
+A causal architecture does not automatically make the current integration truly streaming. The ConvTasNet processor, for example, runs finite causal segments and does not yet preserve internal convolution state between calls.
 
 ## Failure behaviour
 
-The initial implementation favours bounded memory and visible degradation:
+The implementation favours bounded memory and visible degradation:
 
 - client playback buffers are bounded;
 - server ingress queues are bounded;
+- processor segment buffers must be bounded;
 - excess packets are dropped rather than growing memory indefinitely;
-- malformed protocol packets are ignored;
-- missing output results in silence rather than replaying stale audio; and
-- processor reset is explicit after discontinuities.
-
-Future work should add sequence-loss metrics and client reconnection state.
+- malformed KANY packets fail visibly;
+- missing output results in silence rather than stale replay;
+- processor reset is explicit after discontinuities;
+- model-loading and inference failures are exposed through logs and diagnostics;
+- a replacement processor is not installed until it has started successfully.
 
 ## Security boundary
 
-The first implementation is intended only for a trusted home LAN. UDP media is unauthenticated and unencrypted. HTTP control endpoints are also unauthenticated.
+The current implementation is intended only for a trusted home LAN. UDP media and HTTP control endpoints are unauthenticated and unencrypted.
 
-Do not expose the service directly to the internet. Any remote deployment should add an authenticated session-control plane and an encrypted media transport or trusted tunnel.
+Do not expose the service directly to the internet. Any remote deployment should add an authenticated session-control plane and encrypted media transport or a trusted tunnel.
 
-## Delivery phases
+## Delivery status
 
-### Phase 1: transport foundation
+### Completed foundations
 
-- UDP server passthrough
-- bounded queue
-- processor registry
-- health and metrics
+- UDP/KANY end-to-end PCM transport
+- bounded server queue and client playback buffer
+- stable processor lifecycle and registry
+- health, status, metrics and runtime settings API
+- web settings console
+- passthrough, delay, null and centre-reduction processors
+- buffered HTDemucs processor
+- buffered finite-segment causal ConvTasNet processor
 
-### Phase 2: end-to-end audio passthrough
+### Current model-delivery sequence
 
-- virtual audio device
-- Rust capture and playback client
-- versioned PCM datagram protocol
-- receive buffer and device diagnostics
+New model families are delivered in explicit stages when compatibility is not already known:
 
-### Phase 3: explicit PCM frame boundary
+#### Stage 0: asset and checkpoint proof
 
-- packet parsing and sequencing on the server
-- timestamped audio frames
-- format negotiation or fixed-session configuration
-- processor-chain abstraction
+- pin model and architecture provenance;
+- download only required assets;
+- construct the exact model from configuration;
+- load the checkpoint strictly on CPU;
+- prove the validation works offline;
+- fail the build on incompatibility;
+- do not register a processor.
 
-### Phase 4: model reference implementation
+#### Stage 1: offline inference proof
 
-- integrate one separator adapter
-- measure added latency, GPU use and quality
-- retain passthrough as the transport baseline
+- run a short deterministic fixture;
+- establish sample rate, tensor shapes, target names/order and output range;
+- prove inference without KANY or runtime controls.
 
-### Phase 5: low-latency model evaluation
+#### Stage 2: processor integration
 
-- compare causal and windowed separators
-- evaluate chunk sizes and overlap
-- add processor chaining, limiter and optional vocal attenuation controls
+- add bounded buffering, resampling where required, inference, packet reconstruction, pacing, lifecycle and diagnostics.
+
+#### Stage 3: runtime controls
+
+- add environment/startup settings, validation, API contracts, restore-default behaviour and console controls.
+
+#### Stage 4: target-host validation
+
+- measure GPU compatibility, VRAM, inference time, real-time factor, added latency, output quality, discontinuities and reset behaviour.
+
+The current MDX23C work is Stage 0 only. See `docs/mdx23c-stage-0.md`.
 
 ## Design principles
 
-1. Prove transport independently of AI inference.
+1. Preserve passthrough as a permanent transport baseline.
 2. Reuse operating-system virtual audio devices rather than writing drivers.
-3. Keep networking, PCM framing and model inference as separate concerns.
-4. Bound every queue and buffer.
-5. Preserve passthrough as a permanent diagnostic mode.
-6. Measure end-to-end latency from capture to audible playback.
-7. Optimise for replaceable processor adapters rather than one chosen model.
+3. Keep networking, KANY framing, lifecycle and model inference as separate concerns.
+4. Bound every queue and model buffer.
+5. Pin and validate external model assets reproducibly.
+6. Make unsupported compatibility fail early and visibly.
+7. Measure end-to-end latency from capture to audible playback.
+8. Optimise for replaceable processor adapters rather than one chosen model.
+9. Add user-facing runtime controls only after model behaviour is proven.
+10. Keep documentation and validation evidence aligned with implementation.
