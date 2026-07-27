@@ -38,6 +38,7 @@
   <section class="card">
     <label for="processor">Processor</label>
     <select id="processor">
+      <option value="mdx23c-vocals">MDX23C vocals (finite-window)</option>
       <option value="convtasnet-lyrics-causal">ConvTasNet lyrics causal</option>
       <option value="htdemucs-vocals">HTDemucs vocals</option>
       <option value="stereo-centre-reduction">Stereo centre reduction</option>
@@ -107,6 +108,17 @@
       <label for="convtasnetAccompanimentSourceIndex">Accompaniment source index</label>
       <input id="convtasnetAccompanimentSourceIndex" type="number" min="0" step="1">
     </div>
+    <div class="group" id="mdx23cGroup">
+      <h2>MDX23C vocals</h2>
+      <div class="muted">Non-causal finite-window separation. Segment, overlap, batch, device and precision changes reset/reload the processor; vocal reduction applies live. Algorithmic buffering is at least one segment.</div>
+      <label for="mdx23cDevice">Device (auto, cpu, cuda; reload)</label><input id="mdx23cDevice" type="text">
+      <label for="mdx23cSegment">Segment seconds (reload; 0.25, 0.5, 0.75, 1, 1.5, 2)</label><select id="mdx23cSegment"><option>0.25</option><option>0.5</option><option>0.75</option><option>1</option><option>1.5</option><option>2</option></select>
+      <label for="mdx23cOverlap">Overlap (reload; 0–0.49, smoother joins cost compute)</label><input id="mdx23cOverlap" type="number" min="0" max="0.49" step="0.01">
+      <label for="mdx23cBatch">Batch size (reload; currently 1)</label><input id="mdx23cBatch" type="number" min="1" max="1">
+      <label for="mdx23cPrecision">Precision (reload)</label><select id="mdx23cPrecision"><option>float32</option><option>float16</option><option>bfloat16</option></select>
+      <label for="mdx23cReduction">Vocal reduction (live)</label><input id="mdx23cReduction" type="range" min="0" max="1" step="0.01"><output id="mdx23cReductionValue"></output>
+      <div class="startup" id="mdx23cDefaults">Startup defaults: -</div>
+    </div>
 
     <div class="actions">
       <button class="primary" id="apply">Apply</button>
@@ -130,6 +142,8 @@
       <dt>Real-time factor</dt><dd id="statusRtf">-</dd>
       <dt>Buffered packets</dt><dd id="statusBuffered">-</dd>
       <dt>Lookahead</dt><dd id="statusLookahead">-</dd>
+      <dt>Algorithmic latency</dt><dd id="statusLatency">-</dd>
+      <dt>Queue / drops / underruns</dt><dd id="statusQueues">-</dd>
       <dt>Last error</dt><dd id="statusError">-</dd>
     </dl>
   </section>
@@ -139,6 +153,7 @@ const $ = id => document.getElementById(id);
 const vocalReduction = $('vocalReduction');
 const centreReduction = $('centreReduction');
 const convtasnetVocalReduction = $('convtasnetVocalReduction');
+const mdx23cReduction = $('mdx23cReduction');
 
 function showPercent(input, output) {
   output.textContent = `${Math.round(Number(input.value) * 100)}%`;
@@ -149,11 +164,13 @@ function updateVisibleGroups() {
   $('demucsGroup').hidden = processor !== 'htdemucs-vocals';
   $('convtasnetGroup').hidden = processor !== 'convtasnet-lyrics-causal';
   $('centreGroup').hidden = processor !== 'stereo-centre-reduction';
+  $('mdx23cGroup').hidden = processor !== 'mdx23c-vocals';
 }
 
 vocalReduction.addEventListener('input', () => showPercent(vocalReduction, $('vocalReductionValue')));
 centreReduction.addEventListener('input', () => showPercent(centreReduction, $('centreReductionValue')));
 convtasnetVocalReduction.addEventListener('input', () => showPercent(convtasnetVocalReduction, $('convtasnetVocalReductionValue')));
+mdx23cReduction.addEventListener('input', () => showPercent(mdx23cReduction, $('mdx23cReductionValue')));
 $('processor').addEventListener('change', updateVisibleGroups);
 
 function renderStatus(status) {
@@ -171,6 +188,8 @@ function renderStatus(status) {
   $('statusRtf').textContent = d.last_real_time_factor == null ? '-' : Number(d.last_real_time_factor).toFixed(3);
   $('statusBuffered').textContent = d.buffered_input_packets ?? '-';
   $('statusLookahead').textContent = d.algorithmic_lookahead_ms == null ? '-' : `${Number(d.algorithmic_lookahead_ms).toFixed(1)} ms`;
+  $('statusLatency').textContent = d.estimated_algorithmic_latency_seconds == null ? '-' : `${Number(d.estimated_algorithmic_latency_seconds).toFixed(3)} s (finite-window estimate)`;
+  $('statusQueues').textContent = `${d.queued_input_seconds ?? '-'} s input / ${d.queued_output_seconds ?? '-'} s output; ${d.dropped_packets ?? 0} drops; ${d.underruns ?? 0} underruns`;
   $('statusError').textContent = d.last_error || '-';
 }
 
@@ -197,12 +216,17 @@ async function load() {
   $('convtasnetSegmentSeconds').value = settings.convtasnet.segment_seconds;
   $('convtasnetVocalSourceIndex').value = settings.convtasnet.vocal_source_index;
   $('convtasnetAccompanimentSourceIndex').value = settings.convtasnet.accompaniment_source_index;
+  $('mdx23cDevice').value = settings.mdx23c.device; $('mdx23cSegment').value = settings.mdx23c.segment_seconds;
+  $('mdx23cOverlap').value = settings.mdx23c.overlap; $('mdx23cBatch').value = settings.mdx23c.batch_size;
+  $('mdx23cPrecision').value = settings.mdx23c.precision; mdx23cReduction.value = settings.mdx23c.vocal_reduction;
+  const md = settings.startup_defaults.mdx23c; $('mdx23cDefaults').textContent = `Startup defaults: ${md.segment_seconds}s, overlap ${md.overlap}, batch ${md.batch_size}, ${md.device}/${md.precision}`;
 
   centreReduction.value = settings.centre_reduction.reduction;
 
   showPercent(vocalReduction, $('vocalReductionValue'));
   showPercent(convtasnetVocalReduction, $('convtasnetVocalReductionValue'));
   showPercent(centreReduction, $('centreReductionValue'));
+  showPercent(mdx23cReduction, $('mdx23cReductionValue'));
   updateVisibleGroups();
   renderStatus(status);
 }
@@ -227,7 +251,8 @@ async function apply() {
       vocal_reduction: Number(convtasnetVocalReduction.value),
       vocal_source_index: Number($('convtasnetVocalSourceIndex').value),
       accompaniment_source_index: Number($('convtasnetAccompanimentSourceIndex').value)
-    }
+    },
+    mdx23c: {device: $('mdx23cDevice').value, segment_seconds: Number($('mdx23cSegment').value), overlap: Number($('mdx23cOverlap').value), batch_size: Number($('mdx23cBatch').value), vocal_reduction: Number(mdx23cReduction.value), precision: $('mdx23cPrecision').value}
   };
   const response = await fetch('/api/settings', {
     method: 'PATCH',

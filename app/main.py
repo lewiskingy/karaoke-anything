@@ -43,11 +43,20 @@ class ConvTasNetSettingsUpdate(BaseModel):
 class CentreReductionSettingsUpdate(BaseModel):
     reduction: float | None = Field(default=None, ge=0, le=1)
 
+class MDX23CSettingsUpdate(BaseModel):
+    device: str | None = None
+    segment_seconds: float | None = None
+    overlap: float | None = Field(default=None, ge=0, lt=0.5)
+    batch_size: int | None = Field(default=None, ge=1)
+    vocal_reduction: float | None = Field(default=None, ge=0, le=1)
+    precision: str | None = None
+
 
 class RuntimeSettingsUpdate(BaseModel):
     processor: str | None = None
     demucs: DemucsSettingsUpdate | None = None
     convtasnet: ConvTasNetSettingsUpdate | None = None
+    mdx23c: MDX23CSettingsUpdate | None = None
     centre_reduction: CentreReductionSettingsUpdate | None = None
 
 
@@ -130,6 +139,12 @@ def _flatten_updates(payload: RuntimeSettingsUpdate) -> dict[str, object]:
         value = payload.centre_reduction.reduction
         if value is not None and value != current.centre_reduction:
             updates["centre_reduction"] = value
+    if payload.mdx23c is not None:
+        for request_name in ("device", "segment_seconds", "overlap", "batch_size", "vocal_reduction", "precision"):
+            settings_name = f"mdx23c_{request_name}"
+            value = getattr(payload.mdx23c, request_name)
+            if value is not None and value != getattr(current, settings_name):
+                updates[settings_name] = value
     return updates
 
 

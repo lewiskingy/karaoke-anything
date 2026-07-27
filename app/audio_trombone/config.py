@@ -31,6 +31,15 @@ class Settings:
     convtasnet_vocal_source_index: int = 0
     convtasnet_accompaniment_source_index: int = 1
 
+    mdx23c_config_path: str = "/models/mdx23c/model_2_stem_full_band_8k.yaml"
+    mdx23c_checkpoint_path: str = "/models/mdx23c/MDX23C-8KFFT-InstVoc_HQ.ckpt"
+    mdx23c_device: str = "auto"
+    mdx23c_segment_seconds: float = 1.0
+    mdx23c_overlap: float = 0.25
+    mdx23c_batch_size: int = 1
+    mdx23c_vocal_reduction: float = 1.0
+    mdx23c_precision: str = "float32"
+
     centre_reduction: float = 0.7
 
     @classmethod
@@ -68,5 +77,13 @@ class Settings:
             convtasnet_accompaniment_source_index=int(
                 os.getenv("CONVTASNET_ACCOMPANIMENT_SOURCE_INDEX", "1")
             ),
+            mdx23c_config_path=os.getenv("MDX23C_CONFIG_PATH", "/models/mdx23c/model_2_stem_full_band_8k.yaml"),
+            mdx23c_checkpoint_path=os.getenv("MDX23C_CHECKPOINT_PATH", "/models/mdx23c/MDX23C-8KFFT-InstVoc_HQ.ckpt"),
+            mdx23c_device=os.getenv("MDX23C_DEVICE", "auto"),
+            mdx23c_segment_seconds=float(os.getenv("MDX23C_SEGMENT_SECONDS", "1.0")),
+            mdx23c_overlap=float(os.getenv("MDX23C_OVERLAP", "0.25")),
+            mdx23c_batch_size=int(os.getenv("MDX23C_BATCH_SIZE", "1")),
+            mdx23c_vocal_reduction=float(os.getenv("MDX23C_VOCAL_REDUCTION", "1.0")),
+            mdx23c_precision=os.getenv("MDX23C_PRECISION", "float32"),
             centre_reduction=float(os.getenv("CENTRE_REDUCTION", "0.7")),
         )

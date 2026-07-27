@@ -109,6 +109,15 @@ class TromboneService:
                 "vocal_source_index": self.settings.convtasnet_vocal_source_index,
                 "accompaniment_source_index": self.settings.convtasnet_accompaniment_source_index,
             },
+            "mdx23c": {
+                "device": self.settings.mdx23c_device,
+                "segment_seconds": self.settings.mdx23c_segment_seconds,
+                "overlap": self.settings.mdx23c_overlap,
+                "batch_size": self.settings.mdx23c_batch_size,
+                "vocal_reduction": self.settings.mdx23c_vocal_reduction,
+                "precision": self.settings.mdx23c_precision,
+                "reload_fields": ["device", "segment_seconds", "overlap", "batch_size", "precision"],
+            },
             "centre_reduction": {
                 "reduction": self.settings.centre_reduction,
             },
@@ -129,6 +138,14 @@ class TromboneService:
                     "vocal_reduction": self.startup_settings.convtasnet_vocal_reduction,
                     "vocal_source_index": self.startup_settings.convtasnet_vocal_source_index,
                     "accompaniment_source_index": self.startup_settings.convtasnet_accompaniment_source_index,
+                },
+                "mdx23c": {
+                    "device": self.startup_settings.mdx23c_device,
+                    "segment_seconds": self.startup_settings.mdx23c_segment_seconds,
+                    "overlap": self.startup_settings.mdx23c_overlap,
+                    "batch_size": self.startup_settings.mdx23c_batch_size,
+                    "vocal_reduction": self.startup_settings.mdx23c_vocal_reduction,
+                    "precision": self.startup_settings.mdx23c_precision,
                 },
                 "centre_reduction": {
                     "reduction": self.startup_settings.centre_reduction,
@@ -152,6 +169,8 @@ class TromboneService:
             "convtasnet_vocal_source_index",
             "convtasnet_accompaniment_source_index",
             "centre_reduction",
+            "mdx23c_device", "mdx23c_segment_seconds", "mdx23c_overlap",
+            "mdx23c_batch_size", "mdx23c_vocal_reduction", "mdx23c_precision",
         }
         unknown = set(updates) - allowed
         if unknown:
@@ -175,6 +194,9 @@ class TromboneService:
                     "Updated live ConvTasNet vocal reduction to %.2f",
                     candidate.convtasnet_vocal_reduction,
                 )
+            elif "mdx23c_vocal_reduction" in updates:
+                self.processor.vocal_reduction = candidate.mdx23c_vocal_reduction  # type: ignore[attr-defined]
+                applies_from = "next segment"
             else:
                 self.processor.centre_reduction = candidate.centre_reduction  # type: ignore[attr-defined]
                 applies_from = "next packet"
@@ -205,6 +227,10 @@ class TromboneService:
             and self.processor.name == "htdemucs-vocals"
             and hasattr(self.processor, "vocal_reduction")
         ) or (
+            keys == {"mdx23c_vocal_reduction"}
+            and self.processor.name == "mdx23c-vocals"
+            and hasattr(self.processor, "vocal_reduction")
+        ) or (
             keys == {"convtasnet_vocal_reduction"}
             and self.processor.name == "convtasnet-lyrics-causal"
             and hasattr(self.processor, "vocal_reduction")
@@ -233,6 +259,8 @@ class TromboneService:
                 "convtasnet_vocal_source_index",
                 "convtasnet_accompaniment_source_index",
                 "centre_reduction",
+                "mdx23c_device", "mdx23c_segment_seconds", "mdx23c_overlap",
+                "mdx23c_batch_size", "mdx23c_vocal_reduction", "mdx23c_precision",
             )
         }
         return await self.update_runtime_settings(updates)
@@ -265,6 +293,16 @@ class TromboneService:
             raise ValueError("ConvTasNet vocal and accompaniment source indexes must differ")
         if not 0 <= settings.centre_reduction <= 1:
             raise ValueError("centre_reduction must be between 0.0 and 1.0")
+        if settings.mdx23c_segment_seconds not in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0):
+            raise ValueError("MDX23C segment_seconds must be one of 0.25, 0.5, 0.75, 1.0, 1.5, 2.0")
+        if not 0 <= settings.mdx23c_overlap < 0.5:
+            raise ValueError("MDX23C overlap must be between 0.0 and less than 0.5")
+        if settings.mdx23c_batch_size != 1:
+            raise ValueError("MDX23C batch_size must be 1")
+        if not 0 <= settings.mdx23c_vocal_reduction <= 1:
+            raise ValueError("MDX23C vocal_reduction must be between 0.0 and 1.0")
+        if settings.mdx23c_precision not in {"float32", "float16", "bfloat16"}:
+            raise ValueError("MDX23C precision must be float32, float16, or bfloat16")
 
     async def _processing_loop(self) -> None:
         while True:
