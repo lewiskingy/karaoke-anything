@@ -5,7 +5,7 @@ ARG CONVTASNET_MODEL_REVISION=main
 ARG MDX23C_MODEL_REPO=Politrees/UVR_resources
 ARG MDX23C_MODEL_REVISION=0472e5cd4e0f77b95ca2df7a8162992e6799fa49
 # Upstream MDX23C implementation snapshot; override only with another reviewed commit.
-ARG MDX23C_ARCH_REVISION=0d7b3c47656f07c0f4f17b41b61593a4e32fdc88
+ARG MDX23C_ARCH_REVISION=83d495dfc81b2ede9bc62f4209619f8bdfd14995
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -50,7 +50,9 @@ RUN curl --fail --location --silent --show-error \
       --output app/audio_trombone/vendor/mdx23c_tfc_tdf_v3.py \
     && curl --fail --location --silent --show-error \
       "https://raw.githubusercontent.com/ZFTurbo/Music-Source-Separation-Training/${MDX23C_ARCH_REVISION}/LICENSE" \
-      --output app/audio_trombone/vendor/LICENSE.music-source-separation-training
+      --output app/audio_trombone/vendor/LICENSE.music-source-separation-training \
+    && python3 -m audio_trombone.tools.prepare_mdx23c_architecture \
+      app/audio_trombone/vendor/mdx23c_tfc_tdf_v3.py
 
 RUN python3 -c "from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo; model = ConvTasNetStereo.from_pretrained('/models/convtasnet-lyrics-causal', local_files_only=True); print('ConvTasNet model loaded', model.samplerate, model.audio_channels, model.C)"
 
