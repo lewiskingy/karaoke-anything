@@ -106,12 +106,17 @@ def test_load_config_rejects_non_mapping_document(tmp_path: Path):
 
 
 class _FakeModel:
+    instances: list["_FakeModel"] = []
+
     def __init__(self, config) -> None:
         self.config = config
         self.loaded_state: dict | None = None
+        self.strict: bool | None = None
+        _FakeModel.instances.append(self)
 
     def load_state_dict(self, state, strict: bool = True) -> None:
         self.loaded_state = state
+        self.strict = strict
 
     def eval(self) -> None:
         pass
@@ -164,7 +169,10 @@ def test_validate_loads_checkpoint_strictly_and_prints_summary(
 
     monkeypatch.setattr(torch, "load", lambda *a, **k: {"weight": object()})
 
+    _FakeModel.instances.clear()
     validate(config_path, checkpoint_path)
+
+    assert _FakeModel.instances[-1].strict is True
 
     output = capsys.readouterr().out
     assert "MDX23C checkpoint validation" in output
@@ -231,4 +239,7 @@ def test_module_runs_as_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(torch, "load", lambda *a, **k: {"weight": object()})
 
+    _FakeModel.instances.clear()
     runpy.run_module("audio_trombone.tools.validate_mdx23c", run_name="__main__")
+
+    assert _FakeModel.instances[-1].strict is True
