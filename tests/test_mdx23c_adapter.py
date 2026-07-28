@@ -58,7 +58,6 @@ def _build_adapter(
     *,
     instruments: list[str] | None = None,
     device: str = "cpu",
-    precision: str = "float32",
 ) -> MDX23CAdapter:
     import torch
 
@@ -66,9 +65,7 @@ def _build_adapter(
     monkeypatch.setattr(torch, "load", lambda *a, **k: {"weight": object()})
     config_path = _write_config(tmp_path, instruments or ["vocals", "instrumental"])
     checkpoint_path = _write_checkpoint(tmp_path)
-    return MDX23CAdapter(
-        config_path, checkpoint_path, device=device, precision=precision
-    )
+    return MDX23CAdapter(config_path, checkpoint_path, device=device, precision="float32")
 
 
 def test_rejects_unsupported_precision() -> None:

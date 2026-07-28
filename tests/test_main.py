@@ -1,9 +1,19 @@
+from dataclasses import dataclass
 import importlib
 import runpy
 import sys
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@dataclass
+class ModelFieldsCase:
+    key: str
+    payload: dict[str, Any]
+    settings_field: str
+    expected_value: Any
 
 
 @pytest.fixture
@@ -91,71 +101,60 @@ def test_patch_runtime_settings_applies_live_centre_reduction(load_main) -> None
         assert body["settings"]["centre_reduction"]["reduction"] == 0.3
 
 
-def test_patch_runtime_settings_changes_demucs_fields(load_main) -> None:
+@pytest.mark.parametrize(
+    "case",
+    [
+        ModelFieldsCase(
+            "demucs",
+            {
+                "model": "htdemucs_ft",
+                "device": "cpu",
+                "segment_seconds": 4.0,
+                "overlap": 0.1,
+                "shifts": 1,
+                "vocal_reduction": 0.6,
+            },
+            "model",
+            "htdemucs_ft",
+        ),
+        ModelFieldsCase(
+            "convtasnet",
+            {
+                "model_path": "/models/other",
+                "device": "cpu",
+                "segment_seconds": 2.0,
+                "vocal_reduction": 0.6,
+                "vocal_source_index": 0,
+                "accompaniment_source_index": 1,
+            },
+            "model_path",
+            "/models/other",
+        ),
+        ModelFieldsCase(
+            "mdx23c",
+            {
+                "device": "cpu",
+                "segment_seconds": 1.5,
+                "overlap": 0.1,
+                "batch_size": 1,
+                "vocal_reduction": 0.6,
+                "precision": "float32",
+            },
+            "segment_seconds",
+            1.5,
+        ),
+    ],
+)
+def test_patch_runtime_settings_changes_model_fields(load_main, case: ModelFieldsCase) -> None:
     main_module = load_main()
     with TestClient(main_module.app) as client:
-        response = client.patch(
-            "/api/settings",
-            json={
-                "demucs": {
-                    "model": "htdemucs_ft",
-                    "device": "cpu",
-                    "segment_seconds": 4.0,
-                    "overlap": 0.1,
-                    "shifts": 1,
-                    "vocal_reduction": 0.6,
-                }
-            },
-        )
+        response = client.patch("/api/settings", json={case.key: case.payload})
+
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "applied"
         assert body["processor_restarted"] is True
-        assert body["settings"]["demucs"]["model"] == "htdemucs_ft"
-
-
-def test_patch_runtime_settings_changes_convtasnet_fields(load_main) -> None:
-    main_module = load_main()
-    with TestClient(main_module.app) as client:
-        response = client.patch(
-            "/api/settings",
-            json={
-                "convtasnet": {
-                    "model_path": "/models/other",
-                    "device": "cpu",
-                    "segment_seconds": 2.0,
-                    "vocal_reduction": 0.6,
-                    "vocal_source_index": 0,
-                    "accompaniment_source_index": 1,
-                }
-            },
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "applied"
-        assert body["settings"]["convtasnet"]["model_path"] == "/models/other"
-
-
-def test_patch_runtime_settings_changes_mdx23c_fields(load_main) -> None:
-    main_module = load_main()
-    with TestClient(main_module.app) as client:
-        response = client.patch(
-            "/api/settings",
-            json={
-                "mdx23c": {
-                    "device": "cpu",
-                    "segment_seconds": 1.5,
-                    "overlap": 0.1,
-                    "batch_size": 1,
-                    "vocal_reduction": 0.6,
-                    "precision": "float32",
-                }
-            },
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "applied"
-        assert body["settings"]["mdx23c"]["segment_seconds"] == 1.5
+        assert body["settings"][case.key][case.settings_field] == case.expected_value
 
 
 def test_patch_runtime_settings_rejects_semantically_invalid_update(load_main) -> None:

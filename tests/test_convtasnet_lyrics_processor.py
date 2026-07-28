@@ -3,6 +3,7 @@ import asyncio
 import sys
 
 import pytest
+import torch
 
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket, ProcessedPacket
@@ -185,40 +186,32 @@ async def test_harvest_inference_reraises_cancelled_error() -> None:
     assert processor._inference_task is None
 
 
+async def _boom() -> array:
+    raise ValueError("boom")
+
+
+async def _wrong_length() -> array:
+    return array("f", [0.0, 0.0, 0.0])
+
+
 @pytest.mark.asyncio
-async def test_harvest_inference_wraps_inference_failure() -> None:
+@pytest.mark.parametrize(
+    "failing_task,match",
+    [
+        (_boom, "ConvTasNet inference failed"),
+        (_wrong_length, "ConvTasNet returned"),
+    ],
+)
+async def test_harvest_inference_wraps_failed_or_malformed_result(failing_task, match) -> None:
     processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
-    async def boom() -> array:
-        raise ValueError("boom")
-
-    task = asyncio.create_task(boom())
+    task = asyncio.create_task(failing_task())
     await asyncio.sleep(0)
     processor._inference_task = task
 
-    with pytest.raises(RuntimeError, match="ConvTasNet inference failed"):
-        await processor._harvest_inference()
-
-    assert processor.last_error == "boom"
-    assert processor._active_packets == []
-
-
-@pytest.mark.asyncio
-async def test_harvest_inference_rejects_sample_count_mismatch() -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
-    decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
-    processor._active_packets = [decoded]
-
-    async def wrong_length() -> array:
-        return array("f", [0.0, 0.0, 0.0])
-
-    task = asyncio.create_task(wrong_length())
-    await asyncio.sleep(0)
-    processor._inference_task = task
-
-    with pytest.raises(RuntimeError, match="ConvTasNet returned"):
+    with pytest.raises(RuntimeError, match=match):
         await processor._harvest_inference()
 
     assert processor._active_packets == []
@@ -286,68 +279,54 @@ def test_run_inference_without_model_raises() -> None:
         processor._run_inference(array("f", [0.0, 0.0]), 1_000, 2)
 
 
-def test_run_inference_raises_on_unexpected_output_rank(monkeypatch: pytest.MonkeyPatch) -> None:
-    import torch
+def _reject_resample(*args, **kwargs):
+    raise AssertionError("resample should not be called when rates match")
 
-    def unexpected_resample(*a, **k):
-        raise AssertionError("resample should not be called when rates match")
 
-    install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
-
+def _stub_model(shape_fn):
     class FakeModel:
         def __call__(self, waveform):
-            return torch.zeros(2, 2)
+            return shape_fn(waveform)
 
-    processor = ConvTasNetLyricsProcessor()
-    processor._model = FakeModel()
+    return FakeModel()
+
+
+def _processor_with_stub_model(shape_fn, **kwargs) -> ConvTasNetLyricsProcessor:
+    processor = ConvTasNetLyricsProcessor(**kwargs)
+    processor._model = _stub_model(shape_fn)
     processor._model_sample_rate = 1_000
     processor._device = "cpu"
-
-    with pytest.raises(RuntimeError, match="Expected ConvTasNet output"):
-        processor._run_inference(array("f", [0.1, 0.2, 0.3, 0.4]), 1_000, 2)
+    return processor
 
 
-def test_run_inference_raises_when_source_index_exceeds_count(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "shape_fn,error_match",
+    [
+        (lambda waveform: torch.zeros(2, 2), "Expected ConvTasNet output"),
+        (
+            lambda waveform: torch.zeros(*waveform.shape[:1], 1, *waveform.shape[1:]),
+            "source index exceeds model output count",
+        ),
+    ],
+)
+def test_run_inference_raises_on_bad_model_output(
+    monkeypatch: pytest.MonkeyPatch, shape_fn, error_match: str
 ) -> None:
-    import torch
+    install_fake_torchaudio(monkeypatch, resample=_reject_resample)
+    processor = _processor_with_stub_model(
+        shape_fn, vocal_source_index=0, accompaniment_source_index=1
+    )
 
-    def unexpected_resample(*a, **k):
-        raise AssertionError("resample should not be called when rates match")
-
-    install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
-
-    class FakeModel:
-        def __call__(self, waveform):
-            batch, channels, frames = waveform.shape
-            return torch.zeros(batch, 1, channels, frames)
-
-    processor = ConvTasNetLyricsProcessor(vocal_source_index=0, accompaniment_source_index=1)
-    processor._model = FakeModel()
-    processor._model_sample_rate = 1_000
-    processor._device = "cpu"
-
-    with pytest.raises(RuntimeError, match="source index exceeds model output count"):
+    with pytest.raises(RuntimeError, match=error_match):
         processor._run_inference(array("f", [0.1, 0.2, 0.3, 0.4]), 1_000, 2)
 
 
 def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.MonkeyPatch) -> None:
-    import torch
-
-    def unexpected_resample(*a, **k):
-        raise AssertionError("resample should not be called when rates match")
-
-    install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
-
-    class FakeModel:
-        def __call__(self, waveform):
-            batch, channels, frames = waveform.shape
-            return torch.zeros(batch, 2, channels, frames)
-
-    processor = ConvTasNetLyricsProcessor(vocal_reduction=1.0)
-    processor._model = FakeModel()
-    processor._model_sample_rate = 1_000
-    processor._device = "cpu"
+    install_fake_torchaudio(monkeypatch, resample=_reject_resample)
+    processor = _processor_with_stub_model(
+        lambda waveform: torch.zeros(*waveform.shape[:1], 2, *waveform.shape[1:]),
+        vocal_reduction=1.0,
+    )
 
     samples = array("f", [0.1, 0.2, 0.3, 0.4])
     result = processor._run_inference(samples, sample_rate=1_000, channels=2)
@@ -358,19 +337,12 @@ def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.Monke
 def test_run_inference_runs_real_torch_path_with_resample_and_padding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import torch
-
     install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
-
-    class FakeModel:
-        def __call__(self, waveform):
-            batch, channels, frames = waveform.shape
-            return torch.zeros(batch, 2, channels, frames)
-
-    processor = ConvTasNetLyricsProcessor(vocal_reduction=1.0)
-    processor._model = FakeModel()
+    processor = _processor_with_stub_model(
+        lambda waveform: torch.zeros(*waveform.shape[:1], 2, *waveform.shape[1:]),
+        vocal_reduction=1.0,
+    )
     processor._model_sample_rate = 2_000
-    processor._device = "cpu"
 
     samples = array("f", [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
     result = processor._run_inference(samples, sample_rate=1_000, channels=2)

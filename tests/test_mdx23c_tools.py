@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 
 
-def _write_wav(path: Path, *, channels: int = 2, sampwidth: int = 2, frames: int = 10, rate: int = 8_000) -> None:
+def _write_wav(path: Path, *, channels: int = 2) -> None:
+    frames, rate = 10, 8_000
     sample_count = frames * channels
     with wave.open(str(path), "wb") as writer:
         writer.setnchannels(channels)
-        writer.setsampwidth(sampwidth)
+        writer.setsampwidth(2)
         writer.setframerate(rate)
-        fmt = {1: "b", 2: "h"}[sampwidth]
-        writer.writeframes(struct.pack(f"<{sample_count}{fmt}", *([1_000] * sample_count)))
+        writer.writeframes(struct.pack(f"<{sample_count}h", *([1_000] * sample_count)))
 
 
 class _FakeAdapterForInfer:
@@ -101,9 +101,7 @@ class _FakeAdapterForBenchmark:
         return waveform
 
 
-def test_benchmark_prints_report_with_cuda_paths(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
-) -> None:
+def _patch_cuda_benchmark_env(monkeypatch: pytest.MonkeyPatch) -> None:
     import torch
 
     monkeypatch.setattr("audio_trombone.mdx23c.MDX23CAdapter", _FakeAdapterForBenchmark)
@@ -115,6 +113,12 @@ def test_benchmark_prints_report_with_cuda_paths(
         "argv",
         ["benchmark_mdx23c", "--device", "cuda", "--segments", "0.25", "--overlaps", "0"],
     )
+
+
+def test_benchmark_prints_report_with_cuda_paths(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    _patch_cuda_benchmark_env(monkeypatch)
 
     from audio_trombone.tools import benchmark_mdx23c
 
@@ -129,17 +133,7 @@ def test_benchmark_prints_report_with_cuda_paths(
 def test_benchmark_module_runs_as_script(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    import torch
-
-    monkeypatch.setattr("audio_trombone.mdx23c.MDX23CAdapter", _FakeAdapterForBenchmark)
-    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda: None)
-    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
-    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda: 1_234)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["benchmark_mdx23c", "--device", "cuda", "--segments", "0.25", "--overlaps", "0"],
-    )
+    _patch_cuda_benchmark_env(monkeypatch)
     monkeypatch.delitem(sys.modules, "audio_trombone.tools.benchmark_mdx23c", raising=False)
 
     runpy.run_module("audio_trombone.tools.benchmark_mdx23c", run_name="__main__")
