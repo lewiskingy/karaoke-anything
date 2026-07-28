@@ -1,5 +1,4 @@
 from array import array
-from types import SimpleNamespace
 
 import pytest
 
@@ -64,9 +63,17 @@ def test_rejects_unsupported_sample_format() -> None:
         KanyPacket.decode(bytes(payload))
 
 
-def test_rejects_zero_channels_frames_or_sample_rate() -> None:
+@pytest.mark.parametrize(
+    "field_slice,value",
+    [
+        (slice(6, 7), b"\x00"),
+        (slice(24, 26), (0).to_bytes(2, "big")),
+        (slice(8, 12), (0).to_bytes(4, "big")),
+    ],
+)
+def test_rejects_zero_channels_frames_or_sample_rate(field_slice, value) -> None:
     payload = bytearray(make_payload(array("f", [0.0, 0.0])))
-    payload[6] = 0
+    payload[field_slice] = value
     with pytest.raises(KanyProtocolError, match="must be non-zero"):
         KanyPacket.decode(bytes(payload))
 
@@ -82,7 +89,7 @@ def test_decode_byteswaps_on_big_endian_hosts(monkeypatch: pytest.MonkeyPatch) -
     expected = array("f", original)
     expected.byteswap()
 
-    monkeypatch.setattr(kany, "sys", SimpleNamespace(byteorder="big"))
+    monkeypatch.setattr(kany.sys, "byteorder", "big")
     packet = KanyPacket.decode(make_payload(original))
 
     assert packet.samples.tobytes() == expected.tobytes()
@@ -106,7 +113,7 @@ def test_encode_samples_byteswaps_on_big_endian_hosts(monkeypatch: pytest.Monkey
     expected = array("f", replacement)
     expected.byteswap()
 
-    monkeypatch.setattr(kany, "sys", SimpleNamespace(byteorder="big"))
+    monkeypatch.setattr(kany.sys, "byteorder", "big")
     encoded = packet.encode_samples(replacement)
 
     assert encoded == packet.raw_header + expected.tobytes()
