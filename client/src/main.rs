@@ -15,7 +15,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use network::{receiver_loop, sender_loop};
+use network::{receiver_loop, sender_loop, AudioFormat, ReceiverConfig, SenderConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "karaoke-anything-client")]
@@ -163,31 +163,28 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
         max_playback_samples.max(1),
     )));
 
+    let format = AudioFormat {
+        channels,
+        sample_rate,
+    };
+
     let sender_running = Arc::clone(&running);
-    let server = cli.server;
-    let sender = thread::spawn(move || {
-        sender_loop(
-            &send_socket,
-            server,
-            packet_rx,
-            sender_running,
-            channels,
-            sample_rate,
-            frames_per_packet as u16,
-        )
-    });
+    let sender_config = SenderConfig {
+        server: cli.server,
+        format,
+        frames_per_packet: frames_per_packet as u16,
+    };
+    let sender =
+        thread::spawn(move || sender_loop(&send_socket, packet_rx, sender_running, sender_config));
 
     let receiver_running = Arc::clone(&running);
     let receiver_queue = Arc::clone(&playback_queue);
+    let receiver_config = ReceiverConfig {
+        format,
+        max_samples: max_playback_samples,
+    };
     let receiver = thread::spawn(move || {
-        receiver_loop(
-            &socket,
-            receiver_queue,
-            receiver_running,
-            channels,
-            sample_rate,
-            max_playback_samples,
-        )
+        receiver_loop(&socket, receiver_queue, receiver_running, receiver_config)
     });
 
     let capture_stream =

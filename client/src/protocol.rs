@@ -15,43 +15,36 @@ pub struct AudioPacket {
     pub samples: Vec<f32>,
 }
 
-pub fn encode_packet(
-    channels: u16,
-    sample_rate: u32,
-    sequence: u32,
-    timestamp_us: u64,
-    frames: u16,
-    samples: &[f32],
-) -> Result<Vec<u8>> {
-    if channels == 0 || channels > u8::MAX as u16 {
+pub fn encode_packet(packet: &AudioPacket) -> Result<Vec<u8>> {
+    if packet.channels == 0 || packet.channels > u8::MAX as u16 {
         bail!("channel count must be between 1 and 255");
     }
-    if frames == 0 {
+    if packet.frames == 0 {
         bail!("frame count must be greater than zero");
     }
 
-    let expected_samples = frames as usize * channels as usize;
-    if samples.len() != expected_samples {
+    let expected_samples = packet.frames as usize * packet.channels as usize;
+    if packet.samples.len() != expected_samples {
         bail!(
             "sample count {} does not match {} frames × {} channels",
-            samples.len(),
-            frames,
-            channels
+            packet.samples.len(),
+            packet.frames,
+            packet.channels
         );
     }
 
-    let mut output = Vec::with_capacity(HEADER_SIZE + samples.len() * 4);
+    let mut output = Vec::with_capacity(HEADER_SIZE + packet.samples.len() * 4);
     output.extend_from_slice(MAGIC);
     output.push(VERSION);
     output.push(0);
-    output.push(channels as u8);
+    output.push(packet.channels as u8);
     output.push(SAMPLE_FORMAT_F32_LE);
-    output.extend_from_slice(&sample_rate.to_be_bytes());
-    output.extend_from_slice(&sequence.to_be_bytes());
-    output.extend_from_slice(&timestamp_us.to_be_bytes());
-    output.extend_from_slice(&frames.to_be_bytes());
+    output.extend_from_slice(&packet.sample_rate.to_be_bytes());
+    output.extend_from_slice(&packet.sequence.to_be_bytes());
+    output.extend_from_slice(&packet.timestamp_us.to_be_bytes());
+    output.extend_from_slice(&packet.frames.to_be_bytes());
     output.extend_from_slice(&0u16.to_be_bytes());
-    for sample in samples {
+    for sample in &packet.samples {
         output.extend_from_slice(&sample.to_le_bytes());
     }
     Ok(output)
@@ -109,49 +102,88 @@ pub fn decode_packet(data: &[u8]) -> Result<AudioPacket> {
 mod tests {
     use super::*;
 
+    /// The packet shared by every test below that only cares about
+    /// decode-side rejection, not the header field values themselves.
+    fn sample_packet() -> AudioPacket {
+        AudioPacket {
+            channels: 2,
+            sample_rate: 48_000,
+            sequence: 1,
+            timestamp_us: 0,
+            frames: 1,
+            samples: vec![0.0, 0.0],
+        }
+    }
+
     #[test]
     fn packet_round_trip() {
-        let samples = vec![0.0, 0.5, -0.5, 1.0];
-        let encoded = encode_packet(2, 48_000, 42, 1234, 2, &samples).unwrap();
+        let packet = AudioPacket {
+            channels: 2,
+            sample_rate: 48_000,
+            sequence: 42,
+            timestamp_us: 1234,
+            frames: 2,
+            samples: vec![0.0, 0.5, -0.5, 1.0],
+        };
+        let encoded = encode_packet(&packet).unwrap();
         let decoded = decode_packet(&encoded).unwrap();
 
-        assert_eq!(decoded.channels, 2);
-        assert_eq!(decoded.sample_rate, 48_000);
-        assert_eq!(decoded.sequence, 42);
-        assert_eq!(decoded.timestamp_us, 1234);
-        assert_eq!(decoded.frames, 2);
-        assert_eq!(decoded.samples, samples);
+        assert_eq!(decoded.channels, packet.channels);
+        assert_eq!(decoded.sample_rate, packet.sample_rate);
+        assert_eq!(decoded.sequence, packet.sequence);
+        assert_eq!(decoded.timestamp_us, packet.timestamp_us);
+        assert_eq!(decoded.frames, packet.frames);
+        assert_eq!(decoded.samples, packet.samples);
     }
 
     #[test]
     fn malformed_payload_is_rejected() {
-        let mut encoded = encode_packet(2, 48_000, 1, 0, 1, &[0.0, 0.0]).unwrap();
+        let mut encoded = encode_packet(&sample_packet()).unwrap();
         encoded.pop();
         assert!(decode_packet(&encoded).is_err());
     }
 
     #[test]
     fn encode_rejects_sample_count_mismatch() {
-        let error = encode_packet(2, 48_000, 0, 0, 2, &[0.0, 0.0]).unwrap_err();
+        let packet = AudioPacket {
+            frames: 2,
+            samples: vec![0.0, 0.0],
+            ..sample_packet()
+        };
+        let error = encode_packet(&packet).unwrap_err();
         assert!(error.to_string().contains("sample count"));
     }
 
     #[test]
     fn encode_rejects_zero_channels() {
-        let error = encode_packet(0, 48_000, 0, 0, 1, &[]).unwrap_err();
+        let packet = AudioPacket {
+            channels: 0,
+            samples: vec![],
+            ..sample_packet()
+        };
+        let error = encode_packet(&packet).unwrap_err();
         assert!(error.to_string().contains("channel count"));
     }
 
     #[test]
     fn encode_rejects_channels_above_255() {
-        let samples = vec![0.0; 256];
-        let error = encode_packet(256, 48_000, 0, 0, 1, &samples).unwrap_err();
+        let packet = AudioPacket {
+            channels: 256,
+            samples: vec![0.0; 256],
+            ..sample_packet()
+        };
+        let error = encode_packet(&packet).unwrap_err();
         assert!(error.to_string().contains("channel count"));
     }
 
     #[test]
     fn encode_rejects_zero_frames() {
-        let error = encode_packet(2, 48_000, 0, 0, 0, &[]).unwrap_err();
+        let packet = AudioPacket {
+            frames: 0,
+            samples: vec![],
+            ..sample_packet()
+        };
+        let error = encode_packet(&packet).unwrap_err();
         assert!(error.to_string().contains("frame count"));
     }
 
@@ -163,7 +195,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_incorrect_magic() {
-        let mut encoded = encode_packet(2, 48_000, 1, 0, 1, &[0.0, 0.0]).unwrap();
+        let mut encoded = encode_packet(&sample_packet()).unwrap();
         encoded[0] = b'X';
         let error = decode_packet(&encoded).unwrap_err();
         assert!(error.to_string().contains("incorrect packet magic"));
@@ -171,7 +203,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_unsupported_version() {
-        let mut encoded = encode_packet(2, 48_000, 1, 0, 1, &[0.0, 0.0]).unwrap();
+        let mut encoded = encode_packet(&sample_packet()).unwrap();
         encoded[4] = 2;
         let error = decode_packet(&encoded).unwrap_err();
         assert!(error.to_string().contains("unsupported protocol version"));
@@ -179,7 +211,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_unsupported_sample_format() {
-        let mut encoded = encode_packet(2, 48_000, 1, 0, 1, &[0.0, 0.0]).unwrap();
+        let mut encoded = encode_packet(&sample_packet()).unwrap();
         encoded[7] = 9;
         let error = decode_packet(&encoded).unwrap_err();
         assert!(error.to_string().contains("unsupported sample format"));
@@ -187,7 +219,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_zero_channels_or_frames() {
-        let mut encoded = encode_packet(2, 48_000, 1, 0, 1, &[0.0, 0.0]).unwrap();
+        let mut encoded = encode_packet(&sample_packet()).unwrap();
         encoded[6] = 0;
         let error = decode_packet(&encoded).unwrap_err();
         assert!(error.to_string().contains("must be non-zero"));
@@ -195,7 +227,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_payload_length_mismatch() {
-        let mut encoded = encode_packet(2, 48_000, 1, 0, 1, &[0.0, 0.0]).unwrap();
+        let mut encoded = encode_packet(&sample_packet()).unwrap();
         encoded.extend_from_slice(&[0u8; 4]);
         let error = decode_packet(&encoded).unwrap_err();
         assert!(error.to_string().contains("payload length mismatch"));

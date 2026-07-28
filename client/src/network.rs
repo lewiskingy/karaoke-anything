@@ -8,7 +8,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use crate::protocol::{decode_packet, encode_packet};
+use crate::protocol::{decode_packet, encode_packet, AudioPacket};
 
 /// The subset of UDP socket behaviour `sender_loop`/`receiver_loop` depend on,
 /// extracted so tests can exercise every branch without a real network stack.
@@ -27,14 +27,31 @@ impl AudioSocket for UdpSocket {
     }
 }
 
+/// A stream's channel count and sample rate, shared by both directions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioFormat {
+    pub channels: u16,
+    pub sample_rate: u32,
+}
+
+#[derive(Clone, Copy)]
+pub struct SenderConfig {
+    pub server: SocketAddr,
+    pub format: AudioFormat,
+    pub frames_per_packet: u16,
+}
+
+#[derive(Clone, Copy)]
+pub struct ReceiverConfig {
+    pub format: AudioFormat,
+    pub max_samples: usize,
+}
+
 pub fn sender_loop(
     socket: &dyn AudioSocket,
-    server: SocketAddr,
     packets: Receiver<Vec<f32>>,
     running: Arc<AtomicBool>,
-    channels: u16,
-    sample_rate: u32,
-    frames_per_packet: u16,
+    config: SenderConfig,
 ) -> Result<()> {
     let started = Instant::now();
     let mut sequence = 0u32;
@@ -42,18 +59,18 @@ pub fn sender_loop(
     while running.load(Ordering::SeqCst) {
         match packets.recv_timeout(Duration::from_millis(100)) {
             Ok(samples) => {
-                let timestamp_us = started.elapsed().as_micros() as u64;
-                let datagram = encode_packet(
-                    channels,
-                    sample_rate,
+                let packet = AudioPacket {
+                    channels: config.format.channels,
+                    sample_rate: config.format.sample_rate,
                     sequence,
-                    timestamp_us,
-                    frames_per_packet,
-                    &samples,
-                )?;
+                    timestamp_us: started.elapsed().as_micros() as u64,
+                    frames: config.frames_per_packet,
+                    samples,
+                };
+                let datagram = encode_packet(&packet)?;
                 socket
-                    .send_datagram(&datagram, server)
-                    .with_context(|| format!("failed to send audio to {server}"))?;
+                    .send_datagram(&datagram, config.server)
+                    .with_context(|| format!("failed to send audio to {}", config.server))?;
                 sequence = sequence.wrapping_add(1);
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -67,55 +84,82 @@ pub fn receiver_loop(
     socket: &dyn AudioSocket,
     queue: Arc<Mutex<VecDeque<f32>>>,
     running: Arc<AtomicBool>,
-    expected_channels: u16,
-    expected_sample_rate: u32,
-    max_samples: usize,
+    config: ReceiverConfig,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 65_535];
     let mut expected_sequence: Option<u32> = None;
 
     while running.load(Ordering::SeqCst) {
         match socket.recv_datagram(&mut buffer) {
-            Ok((length, _)) => match decode_packet(&buffer[..length]) {
-                Ok(packet) => {
-                    if packet.channels != expected_channels
-                        || packet.sample_rate != expected_sample_rate
-                    {
-                        eprintln!(
-                            "ignored incompatible packet: {}Hz/{}ch",
-                            packet.sample_rate, packet.channels
-                        );
-                        continue;
-                    }
-
-                    if let Some(expected) = expected_sequence {
-                        if packet.sequence != expected {
-                            eprintln!(
-                                "sequence discontinuity: expected {}, received {}",
-                                expected, packet.sequence
-                            );
-                        }
-                    }
-                    expected_sequence = Some(packet.sequence.wrapping_add(1));
-
-                    let mut queue = queue
-                        .lock()
-                        .map_err(|_| anyhow!("playback queue poisoned"))?;
-                    let keep = packet.samples.len().min(max_samples);
-                    let dropped = packet.samples.len() - keep;
-                    while queue.len() + keep > max_samples && !queue.is_empty() {
-                        queue.pop_front();
-                    }
-                    queue.extend(packet.samples.into_iter().skip(dropped));
-                }
-                Err(error) => eprintln!("ignored invalid packet: {error:#}"),
-            },
+            Ok((length, _)) => {
+                handle_datagram(&buffer[..length], config, &mut expected_sequence, &queue)?
+            }
             Err(error)
                 if error.kind() == std::io::ErrorKind::WouldBlock
                     || error.kind() == std::io::ErrorKind::TimedOut => {}
             Err(error) => return Err(error).context("failed receiving audio"),
         }
     }
+    Ok(())
+}
+
+/// Decodes one datagram and, if it matches `config.format`, buffers its
+/// samples. Malformed or incompatible datagrams are logged and otherwise
+/// ignored - only a poisoned queue lock is treated as fatal for the receive
+/// loop.
+fn handle_datagram(
+    data: &[u8],
+    config: ReceiverConfig,
+    expected_sequence: &mut Option<u32>,
+    queue: &Mutex<VecDeque<f32>>,
+) -> Result<()> {
+    let packet = match decode_packet(data) {
+        Ok(packet) => packet,
+        Err(error) => {
+            eprintln!("ignored invalid packet: {error:#}");
+            return Ok(());
+        }
+    };
+
+    if packet.channels != config.format.channels || packet.sample_rate != config.format.sample_rate
+    {
+        eprintln!(
+            "ignored incompatible packet: {}Hz/{}ch",
+            packet.sample_rate, packet.channels
+        );
+        return Ok(());
+    }
+
+    if let Some(expected) = *expected_sequence {
+        if packet.sequence != expected {
+            eprintln!(
+                "sequence discontinuity: expected {}, received {}",
+                expected, packet.sequence
+            );
+        }
+    }
+    *expected_sequence = Some(packet.sequence.wrapping_add(1));
+
+    buffer_samples(queue, packet.samples, config.max_samples)
+}
+
+/// Appends `samples` to `queue`, evicting the oldest buffered samples (and,
+/// if `samples` alone exceeds `max_samples`, its own oldest samples too) so
+/// the queue never grows past `max_samples`.
+fn buffer_samples(
+    queue: &Mutex<VecDeque<f32>>,
+    samples: Vec<f32>,
+    max_samples: usize,
+) -> Result<()> {
+    let mut queue = queue
+        .lock()
+        .map_err(|_| anyhow!("playback queue poisoned"))?;
+    let keep = samples.len().min(max_samples);
+    let dropped = samples.len() - keep;
+    while queue.len() + keep > max_samples && !queue.is_empty() {
+        queue.pop_front();
+    }
+    queue.extend(samples.into_iter().skip(dropped));
     Ok(())
 }
 
@@ -194,6 +238,40 @@ mod tests {
         "127.0.0.1:9".parse().expect("valid socket address literal")
     }
 
+    fn format() -> AudioFormat {
+        AudioFormat {
+            channels: 2,
+            sample_rate: 48_000,
+        }
+    }
+
+    fn sender_config() -> SenderConfig {
+        SenderConfig {
+            server: addr(),
+            format: format(),
+            frames_per_packet: 1,
+        }
+    }
+
+    fn receiver_config(max_samples: usize) -> ReceiverConfig {
+        ReceiverConfig {
+            format: format(),
+            max_samples,
+        }
+    }
+
+    fn valid_packet(sequence: u32) -> Vec<u8> {
+        encode_packet(&AudioPacket {
+            channels: format().channels,
+            sample_rate: format().sample_rate,
+            sequence,
+            timestamp_us: 0,
+            frames: 1,
+            samples: vec![0.1, 0.2],
+        })
+        .unwrap()
+    }
+
     // --- sender_loop -----------------------------------------------------
 
     #[test]
@@ -202,7 +280,7 @@ mod tests {
         let socket = FakeSocket::send_only(None);
         let running = Arc::new(AtomicBool::new(false));
 
-        let result = sender_loop(&socket, addr(), rx, running, 2, 48_000, 1);
+        let result = sender_loop(&socket, rx, running, sender_config());
 
         assert!(result.is_ok());
     }
@@ -215,7 +293,7 @@ mod tests {
         let socket = FakeSocket::send_only(None);
         let running = Arc::new(AtomicBool::new(true));
 
-        sender_loop(&socket, addr(), rx, running, 2, 48_000, 1).unwrap();
+        sender_loop(&socket, rx, running, sender_config()).unwrap();
 
         let sent = socket.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
@@ -233,7 +311,7 @@ mod tests {
         let socket = FakeSocket::send_only(None);
         let running = Arc::new(AtomicBool::new(true));
 
-        let error = sender_loop(&socket, addr(), rx, running, 2, 48_000, 1).unwrap_err();
+        let error = sender_loop(&socket, rx, running, sender_config()).unwrap_err();
 
         assert!(error.to_string().contains("sample count"));
     }
@@ -246,7 +324,7 @@ mod tests {
         let socket = FakeSocket::send_only(Some(ErrorKind::Other));
         let running = Arc::new(AtomicBool::new(true));
 
-        let error = sender_loop(&socket, addr(), rx, running, 2, 48_000, 1).unwrap_err();
+        let error = sender_loop(&socket, rx, running, sender_config()).unwrap_err();
 
         assert!(error.to_string().contains("failed to send audio to"));
     }
@@ -270,18 +348,151 @@ mod tests {
         let stopper = Arc::clone(&running);
 
         std::thread::scope(|scope| {
-            let handle = scope.spawn(|| sender_loop(&socket, addr(), rx, running, 2, 48_000, 1));
+            let handle = scope.spawn(|| sender_loop(&socket, rx, running, sender_config()));
             std::thread::sleep(Duration::from_millis(20));
             stopper.store(false, Ordering::SeqCst);
             assert!(handle.join().unwrap().is_ok());
         });
     }
 
-    // --- receiver_loop -----------------------------------------------------
+    // --- handle_datagram / buffer_samples -----------------------------------
+    //
+    // These exercise the per-packet business logic directly, without the
+    // FakeSocket/receiver_loop scaffolding the loop-mechanics tests below
+    // still need.
 
-    fn valid_packet(sequence: u32) -> Vec<u8> {
-        encode_packet(2, 48_000, sequence, 0, 1, &[0.1, 0.2]).unwrap()
+    #[test]
+    fn handle_datagram_buffers_matching_packets_in_order() {
+        let queue = Mutex::new(VecDeque::new());
+        let mut expected_sequence = None;
+
+        handle_datagram(
+            &valid_packet(0),
+            receiver_config(1024),
+            &mut expected_sequence,
+            &queue,
+        )
+        .unwrap();
+        handle_datagram(
+            &valid_packet(1),
+            receiver_config(1024),
+            &mut expected_sequence,
+            &queue,
+        )
+        .unwrap();
+
+        let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
+        assert_eq!(buffered, vec![0.1, 0.2, 0.1, 0.2]);
+        assert_eq!(expected_sequence, Some(2));
     }
+
+    #[test]
+    fn handle_datagram_reports_sequence_discontinuity_but_keeps_buffering() {
+        let queue = Mutex::new(VecDeque::new());
+        let mut expected_sequence = None;
+
+        handle_datagram(
+            &valid_packet(0),
+            receiver_config(1024),
+            &mut expected_sequence,
+            &queue,
+        )
+        .unwrap();
+        handle_datagram(
+            &valid_packet(5),
+            receiver_config(1024),
+            &mut expected_sequence,
+            &queue,
+        )
+        .unwrap();
+
+        assert_eq!(queue.lock().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn handle_datagram_ignores_packets_with_mismatched_format() {
+        let queue = Mutex::new(VecDeque::new());
+        let mismatched = encode_packet(&AudioPacket {
+            channels: 1,
+            sample_rate: format().sample_rate,
+            sequence: 0,
+            timestamp_us: 0,
+            frames: 1,
+            samples: vec![0.1],
+        })
+        .unwrap();
+        let mut expected_sequence = None;
+
+        handle_datagram(
+            &mismatched,
+            receiver_config(1024),
+            &mut expected_sequence,
+            &queue,
+        )
+        .unwrap();
+
+        assert!(queue.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn handle_datagram_ignores_malformed_packets() {
+        let queue = Mutex::new(VecDeque::new());
+        let mut expected_sequence = None;
+
+        handle_datagram(
+            &[0u8; 4],
+            receiver_config(1024),
+            &mut expected_sequence,
+            &queue,
+        )
+        .unwrap();
+
+        assert!(queue.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn buffer_samples_evicts_oldest_samples_when_queue_is_full() {
+        let queue = Mutex::new(VecDeque::new());
+
+        buffer_samples(&queue, vec![0.1, 0.2], 2).unwrap();
+        buffer_samples(&queue, vec![0.3, 0.4], 2).unwrap();
+
+        let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
+        assert_eq!(buffered, vec![0.3, 0.4]);
+    }
+
+    #[test]
+    fn buffer_samples_truncates_a_single_batch_larger_than_max_samples() {
+        let queue = Mutex::new(VecDeque::new());
+
+        buffer_samples(&queue, vec![0.1, 0.2], 1).unwrap();
+
+        let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
+        assert_eq!(buffered, vec![0.2]);
+    }
+
+    #[test]
+    fn buffer_samples_reports_poisoned_queue() {
+        let queue = Mutex::new(VecDeque::new());
+        std::thread::scope(|scope| {
+            let _ = scope
+                .spawn(|| {
+                    let _guard = queue.lock().unwrap();
+                    panic!("poison the mutex for test purposes");
+                })
+                .join();
+        });
+
+        let error = buffer_samples(&queue, vec![0.1], 8).unwrap_err();
+
+        assert!(error.to_string().contains("playback queue poisoned"));
+    }
+
+    // --- receiver_loop -----------------------------------------------------
+    //
+    // Only the loop's own mechanics (not-running short-circuit, transient vs.
+    // hard recv errors) live here; per-packet handling is covered above by
+    // the handle_datagram/buffer_samples tests directly.
 
     #[test]
     fn receiver_loop_returns_immediately_when_not_running() {
@@ -289,89 +500,9 @@ mod tests {
         let socket = FakeSocket::recv_script(vec![], Arc::new(AtomicBool::new(true)));
         let queue = Arc::new(Mutex::new(VecDeque::new()));
 
-        let result = receiver_loop(&socket, queue, running, 2, 48_000, 1024);
+        let result = receiver_loop(&socket, queue, running, receiver_config(1024));
 
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn receiver_loop_buffers_matching_packets_in_order() {
-        let running = Arc::new(AtomicBool::new(true));
-        let socket = FakeSocket::recv_script(
-            vec![Ok(valid_packet(0)), Ok(valid_packet(1))],
-            Arc::clone(&running),
-        );
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 1024).unwrap();
-
-        let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
-        assert_eq!(buffered, vec![0.1, 0.2, 0.1, 0.2]);
-    }
-
-    #[test]
-    fn receiver_loop_reports_sequence_discontinuity_but_keeps_buffering() {
-        let running = Arc::new(AtomicBool::new(true));
-        let socket = FakeSocket::recv_script(
-            vec![Ok(valid_packet(0)), Ok(valid_packet(5))],
-            Arc::clone(&running),
-        );
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 1024).unwrap();
-
-        assert_eq!(queue.lock().unwrap().len(), 4);
-    }
-
-    #[test]
-    fn receiver_loop_ignores_packets_with_mismatched_format() {
-        let running = Arc::new(AtomicBool::new(true));
-        let mismatched = encode_packet(1, 48_000, 0, 0, 1, &[0.1]).unwrap();
-        let socket = FakeSocket::recv_script(vec![Ok(mismatched)], Arc::clone(&running));
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 1024).unwrap();
-
-        assert!(queue.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn receiver_loop_ignores_malformed_packets() {
-        let running = Arc::new(AtomicBool::new(true));
-        let socket = FakeSocket::recv_script(vec![Ok(vec![0u8; 4])], Arc::clone(&running));
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 1024).unwrap();
-
-        assert!(queue.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn receiver_loop_evicts_oldest_samples_when_queue_is_full() {
-        let running = Arc::new(AtomicBool::new(true));
-        let socket = FakeSocket::recv_script(
-            vec![Ok(valid_packet(0)), Ok(valid_packet(1))],
-            Arc::clone(&running),
-        );
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 2).unwrap();
-
-        let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
-        assert_eq!(buffered, vec![0.1, 0.2]);
-    }
-
-    #[test]
-    fn receiver_loop_truncates_a_single_packet_larger_than_max_samples() {
-        let running = Arc::new(AtomicBool::new(true));
-        let socket = FakeSocket::recv_script(vec![Ok(valid_packet(0))], Arc::clone(&running));
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 1).unwrap();
-
-        let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
-        assert_eq!(buffered.len(), 1);
-        assert_eq!(buffered, vec![0.2]);
     }
 
     #[test]
@@ -387,7 +518,7 @@ mod tests {
         );
         let queue = Arc::new(Mutex::new(VecDeque::new()));
 
-        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 1024).unwrap();
+        receiver_loop(&socket, Arc::clone(&queue), running, receiver_config(1024)).unwrap();
 
         assert_eq!(queue.lock().unwrap().len(), 2);
     }
@@ -401,13 +532,17 @@ mod tests {
         );
         let queue = Arc::new(Mutex::new(VecDeque::new()));
 
-        let error = receiver_loop(&socket, queue, running, 2, 48_000, 1024).unwrap_err();
+        let error = receiver_loop(&socket, queue, running, receiver_config(1024)).unwrap_err();
 
         assert!(error.to_string().contains("failed receiving audio"));
     }
 
+    /// Proves `handle_datagram`'s error path is actually wired up through
+    /// `receiver_loop`'s `?`, not just correct in isolation (as the
+    /// `buffer_samples_reports_poisoned_queue` unit test above already
+    /// shows).
     #[test]
-    fn receiver_loop_reports_poisoned_queue() {
+    fn receiver_loop_propagates_handle_datagram_errors() {
         let running = Arc::new(AtomicBool::new(true));
         let socket = FakeSocket::recv_script(vec![Ok(valid_packet(0))], Arc::clone(&running));
         let queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -419,7 +554,7 @@ mod tests {
         })
         .join();
 
-        let error = receiver_loop(&socket, queue, running, 2, 48_000, 1024).unwrap_err();
+        let error = receiver_loop(&socket, queue, running, receiver_config(1024)).unwrap_err();
 
         assert!(error.to_string().contains("playback queue poisoned"));
     }
@@ -445,8 +580,12 @@ mod tests {
         tx.send(vec![0.1, 0.2]).unwrap();
         drop(tx);
         let running = Arc::new(AtomicBool::new(true));
+        let config = SenderConfig {
+            server: receiver_addr,
+            ..sender_config()
+        };
 
-        sender_loop(&sender_socket, receiver_addr, rx, running, 2, 48_000, 1).unwrap();
+        sender_loop(&sender_socket, rx, running, config).unwrap();
 
         let mut buffer = [0u8; 65_535];
         let (length, _) = receiver_socket.recv_from(&mut buffer).unwrap();
@@ -476,9 +615,7 @@ mod tests {
                     &receiver_socket,
                     Arc::clone(&queue),
                     running,
-                    2,
-                    48_000,
-                    1024,
+                    receiver_config(1024),
                 )
             });
 
