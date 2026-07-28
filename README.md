@@ -50,8 +50,9 @@ Documentation is part of the implementation. Behaviour, configuration, model pro
 | `stereo-centre-reduction` | Zero-lookahead mid/side vocal reduction | None |
 | `htdemucs-vocals` | Buffered HTDemucs vocal reduction | GPU image recommended |
 | `convtasnet-lyrics-causal` | Buffered finite-segment causal lyrics/accompaniment separation | GPU image recommended |
+| `mdx23c-vocals` | Non-causal finite-window MDX23C vocal reduction | GPU image required; target validation pending |
 
-MDX23C is **not yet a processor**. The current branch task is Stage 0 only: prove that one pinned YAML/checkpoint pair can be acquired, constructed and loaded strictly and offline. See `docs/mdx23c-stage-0.md`.
+MDX23C Stage 0 provenance is retained in `docs/mdx23c-stage-0.md`; offline inference, streaming, settings and pending target-host validation are documented in `docs/mdx23c.md`.
 
 ## Server deployment
 
@@ -186,6 +187,7 @@ curl -X PUT http://localhost:8080/processor/null
 curl -X PUT http://localhost:8080/processor/stereo-centre-reduction
 curl -X PUT http://localhost:8080/processor/htdemucs-vocals
 curl -X PUT http://localhost:8080/processor/convtasnet-lyrics-causal
+curl -X PUT http://localhost:8080/processor/mdx23c-vocals
 ```
 
 The web console is available at:

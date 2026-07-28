@@ -136,6 +136,28 @@ def test_patch_runtime_settings_changes_convtasnet_fields(load_main) -> None:
         assert body["settings"]["convtasnet"]["model_path"] == "/models/other"
 
 
+def test_patch_runtime_settings_changes_mdx23c_fields(load_main) -> None:
+    main_module = load_main()
+    with TestClient(main_module.app) as client:
+        response = client.patch(
+            "/api/settings",
+            json={
+                "mdx23c": {
+                    "device": "cpu",
+                    "segment_seconds": 1.5,
+                    "overlap": 0.1,
+                    "batch_size": 1,
+                    "vocal_reduction": 0.6,
+                    "precision": "float32",
+                }
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "applied"
+        assert body["settings"]["mdx23c"]["segment_seconds"] == 1.5
+
+
 def test_patch_runtime_settings_rejects_semantically_invalid_update(load_main) -> None:
     main_module = load_main()
     with TestClient(main_module.app) as client:

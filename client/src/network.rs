@@ -101,10 +101,12 @@ pub fn receiver_loop(
                     let mut queue = queue
                         .lock()
                         .map_err(|_| anyhow!("playback queue poisoned"))?;
-                    while queue.len() + packet.samples.len() > max_samples && !queue.is_empty() {
+                    let keep = packet.samples.len().min(max_samples);
+                    let dropped = packet.samples.len() - keep;
+                    while queue.len() + keep > max_samples && !queue.is_empty() {
                         queue.pop_front();
                     }
-                    queue.extend(packet.samples);
+                    queue.extend(packet.samples.into_iter().skip(dropped));
                 }
                 Err(error) => eprintln!("ignored invalid packet: {error:#}"),
             },
@@ -346,6 +348,19 @@ mod tests {
 
         let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
         assert_eq!(buffered, vec![0.1, 0.2]);
+    }
+
+    #[test]
+    fn receiver_loop_truncates_a_single_packet_larger_than_max_samples() {
+        let running = Arc::new(AtomicBool::new(true));
+        let socket = FakeSocket::recv_script(vec![Ok(valid_packet(0))], Arc::clone(&running));
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
+
+        receiver_loop(&socket, Arc::clone(&queue), running, 2, 48_000, 1).unwrap();
+
+        let buffered: Vec<f32> = queue.lock().unwrap().iter().copied().collect();
+        assert_eq!(buffered.len(), 1);
+        assert_eq!(buffered, vec![0.2]);
     }
 
     #[test]

@@ -7,6 +7,7 @@ from audio_trombone.processors.convtasnet_lyrics import ConvTasNetLyricsProcesso
 from audio_trombone.processors.delay import DelayPassthroughProcessor
 from audio_trombone.processors.htdemucs import HTDemucsProcessor
 from audio_trombone.processors.null import NullProcessor
+from audio_trombone.processors.mdx23c_vocals import MDX23CVocalsProcessor
 from audio_trombone.processors.passthrough import PassthroughProcessor
 
 ProcessorFactory = Callable[[], AudioProcessor]
@@ -39,6 +40,16 @@ class ProcessorRegistry:
                 accompaniment_source_index=(
                     settings.convtasnet_accompaniment_source_index
                 ),
+            ),
+            "mdx23c-vocals": lambda: MDX23CVocalsProcessor(
+                config_path=settings.mdx23c_config_path,
+                checkpoint_path=settings.mdx23c_checkpoint_path,
+                device=settings.mdx23c_device,
+                segment_seconds=settings.mdx23c_segment_seconds,
+                overlap=settings.mdx23c_overlap,
+                batch_size=settings.mdx23c_batch_size,
+                vocal_reduction=settings.mdx23c_vocal_reduction,
+                precision=settings.mdx23c_precision,
             ),
         }
 

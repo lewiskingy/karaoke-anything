@@ -231,6 +231,17 @@ async def test_update_runtime_settings_applies_live_convtasnet_vocal_reduction()
 
 
 @pytest.mark.asyncio
+async def test_update_runtime_settings_applies_live_mdx23c_vocal_reduction() -> None:
+    service = make_service(processor="mdx23c-vocals")
+
+    result = await service.update_runtime_settings({"mdx23c_vocal_reduction": 0.4})
+
+    assert result == {"processor_restarted": False, "applies_from": "next segment"}
+    assert service.processor.vocal_reduction == 0.4
+    assert service.settings.mdx23c_vocal_reduction == 0.4
+
+
+@pytest.mark.asyncio
 async def test_update_runtime_settings_restarts_processor_when_not_live_applicable() -> None:
     service = make_service(processor="passthrough")
 
@@ -260,6 +271,11 @@ async def test_update_runtime_settings_restarts_processor_when_not_live_applicab
             "must differ",
         ),
         ({"centre_reduction": 2.0}, "centre_reduction"),
+        ({"mdx23c_segment_seconds": 0.9}, "MDX23C segment_seconds"),
+        ({"mdx23c_overlap": 0.5}, "MDX23C overlap"),
+        ({"mdx23c_batch_size": 2}, "MDX23C batch_size"),
+        ({"mdx23c_vocal_reduction": 1.5}, "MDX23C vocal_reduction"),
+        ({"mdx23c_precision": "int8"}, "MDX23C precision"),
     ],
 )
 @pytest.mark.asyncio
@@ -297,6 +313,11 @@ def test_can_apply_live_true_for_convtasnet_vocal_reduction() -> None:
 def test_can_apply_live_true_for_centre_reduction() -> None:
     service = make_service(processor="stereo-centre-reduction")
     assert service._can_apply_live({"centre_reduction": 0.3}) is True
+
+
+def test_can_apply_live_true_for_mdx23c_vocal_reduction() -> None:
+    service = make_service(processor="mdx23c-vocals")
+    assert service._can_apply_live({"mdx23c_vocal_reduction": 0.3}) is True
 
 
 def test_can_apply_live_false_for_mismatched_processor() -> None:

@@ -192,9 +192,9 @@ The implementation report or pull-request description should include:
 - tests run and their results;
 - any part not validated on the target host.
 
-## Next stage
+## Later stages
 
-Only after Stage 0 is proven should Stage 1 be planned. Stage 1 will establish a small offline inference adapter against a short fixture, including input tensor shape, required sample rate, output shape, target ordering and deterministic numerical sanity checks. It still need not integrate KANY or runtime controls.
+Stage 0 is now the retained provenance proof. See `docs/mdx23c.md` for the Stage 1 adapter, Stage 2/3 integration, and explicitly pending Stage 4 target-host evidence.
 
 ## Reproducing the proof
 

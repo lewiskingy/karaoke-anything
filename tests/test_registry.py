@@ -31,6 +31,7 @@ def test_registry_uses_default_settings_when_none_provided() -> None:
         "stereo-centre-reduction",
         "htdemucs-vocals",
         "convtasnet-lyrics-causal",
+        "mdx23c-vocals",
     ],
 )
 def test_registry_creates_every_registered_processor(name: str) -> None:
@@ -46,7 +47,7 @@ def test_registry_describe_lists_all_processors_sorted_with_capabilities() -> No
 
     names = [entry["name"] for entry in description["processors"]]
     assert names == sorted(names)
-    assert len(names) == 6
+    assert len(names) == 7
 
     passthrough_entry = next(
         entry for entry in description["processors"] if entry["name"] == "passthrough"
@@ -58,3 +59,7 @@ def test_registry_describe_lists_all_processors_sorted_with_capabilities() -> No
         "can_buffer": False,
         "changes_payload": False,
     }
+
+
+def test_registry_describes_mdx23c() -> None:
+    assert "mdx23c-vocals" in {item["name"] for item in ProcessorRegistry().describe()["processors"]}
