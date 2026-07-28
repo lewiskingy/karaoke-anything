@@ -56,3 +56,31 @@ async def test_side_signal_is_preserved() -> None:
 def test_reduction_must_be_bounded() -> None:
     with pytest.raises(ValueError):
         StereoCentreReductionProcessor(centre_reduction=1.1)
+
+
+@pytest.mark.asyncio
+async def test_rejects_non_kany_payload() -> None:
+    processor = StereoCentreReductionProcessor()
+    packet = MediaPacket.received(b"not-a-kany-packet", "127.0.0.1", 40_000)
+
+    with pytest.raises(ValueError, match="requires KANY v1 f32 PCM packets"):
+        await collect(processor, packet)
+
+
+@pytest.mark.asyncio
+async def test_rejects_non_stereo_input() -> None:
+    processor = StereoCentreReductionProcessor()
+    packet = make_media_packet([0.5, 0.25], channels=1)
+
+    with pytest.raises(ValueError, match="requires stereo input"):
+        await collect(processor, packet)
+
+
+def test_diagnostics_reports_reduction_and_gain() -> None:
+    processor = StereoCentreReductionProcessor(centre_reduction=0.3)
+
+    assert processor.diagnostics() == {
+        "centre_reduction": 0.3,
+        "centre_gain": pytest.approx(0.7),
+        "algorithmic_lookahead_ms": 0.0,
+    }

@@ -1,4 +1,6 @@
 import ast
+import runpy
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -6,6 +8,7 @@ import pytest
 
 from audio_trombone.tools.prepare_mdx23c_architecture import (
     EXPECTED_IMPORT,
+    main,
     prepare,
 )
 
@@ -64,3 +67,28 @@ def test_prepare_rejects_unexpected_upstream_source(tmp_path):
 
     with pytest.raises(RuntimeError, match="found 0"):
         prepare(architecture)
+
+
+def test_main_parses_argv_and_prepares_architecture(tmp_path, monkeypatch):
+    architecture = tmp_path / "mdx23c_tfc_tdf_v3.py"
+    architecture.write_text(f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["prepare_mdx23c_architecture", str(architecture)])
+
+    main()
+
+    assert EXPECTED_IMPORT not in architecture.read_text(encoding="utf-8")
+
+
+def test_module_runs_as_script(tmp_path, monkeypatch):
+    architecture = tmp_path / "mdx23c_tfc_tdf_v3.py"
+    architecture.write_text(f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["prepare_mdx23c_architecture", str(architecture)])
+    monkeypatch.delitem(
+        sys.modules, "audio_trombone.tools.prepare_mdx23c_architecture", raising=False
+    )
+
+    runpy.run_module(
+        "audio_trombone.tools.prepare_mdx23c_architecture", run_name="__main__"
+    )
+
+    assert EXPECTED_IMPORT not in architecture.read_text(encoding="utf-8")

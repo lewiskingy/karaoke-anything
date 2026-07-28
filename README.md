@@ -232,16 +232,23 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
 pytest
+pre-commit install
 ```
+
+`pytest` enforces 100% statement coverage on `app/` (`--cov-fail-under=100` in `pyproject.toml`); a failing or coverage-reducing change fails the test run. `pre-commit install` wires the same check into a git pre-commit hook (config in `.pre-commit-config.yaml`) so it also runs before each commit.
 
 ### Client
 
 ```bash
 cd client
 cargo fmt --check
-cargo test
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
+cargo llvm-cov --ignore-filename-regex "main\.rs$" --fail-under-lines 100
 cargo build --release
 ```
+
+`protocol.rs` (KANY packet encode/decode) and `network.rs` (`sender_loop`/`receiver_loop`) are held at 100% line coverage; `cargo llvm-cov` fails if it drops below that. `main.rs` is excluded from the gate: `select_device`, `choose_*_config`, `build_*_stream`, `run()` and `main()` all operate on concrete `cpal::Device`/`cpal::Host` types with no mock backend, so they aren't practically unit-testable without real audio hardware. `sender_loop`/`receiver_loop` take `socket: &dyn AudioSocket` rather than a generic `<S: AudioSocket>` specifically so tests can inject a fake without creating a second, separately-covered monomorphization for the real `UdpSocket` call site in `run()`. The repository's pre-commit hook (see the Server section above) runs this same check.
 
 ## Security boundary
 

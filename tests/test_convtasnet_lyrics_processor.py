@@ -6,11 +6,11 @@ import types
 import pytest
 
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
-from audio_trombone.models import MediaPacket
-from audio_trombone.processors.htdemucs import HTDemucsProcessor
+from audio_trombone.models import MediaPacket, ProcessedPacket
+from audio_trombone.processors.convtasnet_lyrics import ConvTasNetLyricsProcessor
 
 
-def make_media_packet(sequence: int, samples: list[float]) -> MediaPacket:
+def make_media_packet(sequence: int, samples: list[float], sample_rate: int = 1_000) -> MediaPacket:
     channels = 2
     frames = len(samples) // channels
     header = bytearray(HEADER_SIZE)
@@ -18,7 +18,7 @@ def make_media_packet(sequence: int, samples: list[float]) -> MediaPacket:
     header[4] = 1
     header[6] = channels
     header[7] = 1
-    header[8:12] = (1_000).to_bytes(4, "big")
+    header[8:12] = sample_rate.to_bytes(4, "big")
     header[12:16] = sequence.to_bytes(4, "big")
     header[16:24] = (sequence * 2_000).to_bytes(8, "big")
     header[24:26] = frames.to_bytes(2, "big")
@@ -26,23 +26,33 @@ def make_media_packet(sequence: int, samples: list[float]) -> MediaPacket:
     return MediaPacket.received(payload, "127.0.0.1", 40_000)
 
 
-async def collect(processor: HTDemucsProcessor, packet: MediaPacket):
+async def collect(processor: ConvTasNetLyricsProcessor, packet: MediaPacket):
     return [output async for output in processor.process(packet)]
 
 
 def test_vocal_reduction_is_reported_in_diagnostics() -> None:
-    processor = HTDemucsProcessor(vocal_reduction=0.5, inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(vocal_reduction=0.5, inference_fn=lambda s, _r, _c: s)
 
     diagnostics = processor.diagnostics()
 
     assert diagnostics["vocal_reduction"] == pytest.approx(0.5)
-    assert diagnostics["vocal_gain"] == pytest.approx(0.5)
 
 
 @pytest.mark.parametrize("value", [-0.01, 1.01])
 def test_vocal_reduction_must_be_between_zero_and_one(value: float) -> None:
     with pytest.raises(ValueError, match="vocal_reduction"):
-        HTDemucsProcessor(vocal_reduction=value)
+        ConvTasNetLyricsProcessor(vocal_reduction=value)
+
+
+def test_segment_seconds_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="segment_seconds"):
+        ConvTasNetLyricsProcessor(segment_seconds=0)
+
+
+@pytest.mark.parametrize("kwargs", [{"vocal_source_index": -1}, {"accompaniment_source_index": -1}])
+def test_source_indexes_must_be_non_negative(kwargs: dict) -> None:
+    with pytest.raises(ValueError, match="source indexes"):
+        ConvTasNetLyricsProcessor(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -52,7 +62,7 @@ async def test_buffers_inference_and_releases_one_packet_per_input() -> None:
         assert channels == 2
         return array("f", [0.0] * len(samples))
 
-    processor = HTDemucsProcessor(
+    processor = ConvTasNetLyricsProcessor(
         segment_seconds=0.004,
         inference_fn=remove_everything,
     )
@@ -79,24 +89,13 @@ async def test_buffers_inference_and_releases_one_packet_per_input() -> None:
     await processor.stop()
 
 
-def test_segment_seconds_must_be_positive() -> None:
-    with pytest.raises(ValueError, match="segment_seconds"):
-        HTDemucsProcessor(segment_seconds=0)
-
-
-@pytest.mark.parametrize("value", [-0.01, 1.0])
-def test_overlap_must_be_between_zero_and_one(value: float) -> None:
-    with pytest.raises(ValueError, match="overlap"):
-        HTDemucsProcessor(overlap=value)
-
-
 @pytest.mark.asyncio
-async def test_start_loads_separator_when_no_inference_fn_injected(
+async def test_start_loads_model_when_no_inference_fn_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    processor = HTDemucsProcessor()
+    processor = ConvTasNetLyricsProcessor()
     calls = []
-    monkeypatch.setattr(processor, "_load_separator", lambda: calls.append(True))
+    monkeypatch.setattr(processor, "_load_model", lambda: calls.append(True))
 
     await processor.start()
 
@@ -105,7 +104,7 @@ async def test_start_loads_separator_when_no_inference_fn_injected(
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_kany_payload() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     packet = MediaPacket.received(b"not-a-kany-packet", "127.0.0.1", 40_000)
 
     with pytest.raises(ValueError, match="requires KANY v1 f32 PCM packets"):
@@ -114,7 +113,7 @@ async def test_process_rejects_non_kany_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_stereo_input() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     header = bytearray(HEADER_SIZE)
     header[0:4] = b"KANY"
     header[4] = 1
@@ -133,11 +132,11 @@ async def test_process_rejects_non_stereo_input() -> None:
 
 @pytest.mark.asyncio
 async def test_flush_drains_ready_output() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
-    from audio_trombone.models import ProcessedPacket
-
-    processor._ready_output.append(ProcessedPacket(payload=decoded.encode_samples(decoded.samples)))
+    processor._ready_output.append(
+        ProcessedPacket(payload=decoded.encode_samples(decoded.samples))
+    )
 
     flushed = [item async for item in processor.flush()]
 
@@ -146,35 +145,25 @@ async def test_flush_drains_ready_output() -> None:
 
 
 def test_accept_stream_format_rejects_change_without_reset() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     first = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._accept_stream_format(first)
 
-    changed_header = bytearray(HEADER_SIZE)
-    changed_header[0:4] = b"KANY"
-    changed_header[4] = 1
-    changed_header[6] = 2
-    changed_header[7] = 1
-    changed_header[8:12] = (2_000).to_bytes(4, "big")
-    changed_header[12:16] = (0).to_bytes(4, "big")
-    changed_header[16:24] = (0).to_bytes(8, "big")
-    changed_header[24:26] = (2).to_bytes(2, "big")
-    changed_payload = bytes(changed_header) + array("f", [0.1, 0.2, 0.3, 0.4]).tobytes()
-    changed = KanyPacket.decode(changed_payload)
+    changed = KanyPacket.decode(make_media_packet(1, [0.1, 0.2, 0.3, 0.4], sample_rate=2_000).payload)
 
     with pytest.raises(ValueError, match="audio format changed without processor reset"):
         processor._accept_stream_format(changed)
 
 
 def test_target_segment_frames_requires_known_stream_format() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     with pytest.raises(RuntimeError, match="stream format is not known"):
         processor._target_segment_frames()
 
 
 @pytest.mark.asyncio
 async def test_harvest_inference_reraises_cancelled_error() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -198,7 +187,7 @@ async def test_harvest_inference_reraises_cancelled_error() -> None:
 
 @pytest.mark.asyncio
 async def test_harvest_inference_wraps_inference_failure() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -209,7 +198,7 @@ async def test_harvest_inference_wraps_inference_failure() -> None:
     await asyncio.sleep(0)
     processor._inference_task = task
 
-    with pytest.raises(RuntimeError, match="HTDemucs inference failed"):
+    with pytest.raises(RuntimeError, match="ConvTasNet inference failed"):
         await processor._harvest_inference()
 
     assert processor.last_error == "boom"
@@ -218,7 +207,7 @@ async def test_harvest_inference_wraps_inference_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_harvest_inference_rejects_sample_count_mismatch() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -229,80 +218,71 @@ async def test_harvest_inference_rejects_sample_count_mismatch() -> None:
     await asyncio.sleep(0)
     processor._inference_task = task
 
-    with pytest.raises(RuntimeError, match="HTDemucs returned"):
+    with pytest.raises(RuntimeError, match="ConvTasNet returned"):
         await processor._harvest_inference()
 
     assert processor._active_packets == []
 
 
-def _install_fake_demucs(monkeypatch: pytest.MonkeyPatch, instances: list) -> None:
-    class FakeSeparator:
-        def __init__(self, *, model, device, segment, shifts, split, overlap, progress):
-            self.model = model
-            self.device = device
-            self.segment = segment
-            self.shifts = shifts
-            self.split = split
-            self.overlap = overlap
-            self.progress = progress
-            self.samplerate = 44_100
-            self.audio_channels = 2
-            instances.append(self)
+def test_load_model_raises_when_dependencies_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "audio_trombone.vendor.clarity_tasnet", None)
+    processor = ConvTasNetLyricsProcessor()
 
-    fake_api = types.ModuleType("demucs.api")
-    fake_api.Separator = FakeSeparator
-    fake_pkg = types.ModuleType("demucs")
-    fake_pkg.api = fake_api
-
-    monkeypatch.setitem(sys.modules, "demucs", fake_pkg)
-    monkeypatch.setitem(sys.modules, "demucs.api", fake_api)
+    with pytest.raises(RuntimeError, match="ConvTasNet dependencies are not installed"):
+        processor._load_model()
 
 
-def test_load_separator_raises_when_demucs_dependencies_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delitem(sys.modules, "demucs", raising=False)
-    monkeypatch.delitem(sys.modules, "demucs.api", raising=False)
-    processor = HTDemucsProcessor()
+def _tiny_model():
+    from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
-    with pytest.raises(RuntimeError, match="HTDemucs dependencies are not installed"):
-        processor._load_separator()
+    return ConvTasNetStereo(
+        N=4, L=4, B=4, H=4, P=3, X=1, R=1, C=2, audio_channels=2, samplerate=8_000
+    )
 
 
-def test_load_separator_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
-    instances: list = []
-    _install_fake_demucs(monkeypatch, instances)
-    processor = HTDemucsProcessor(model_name="htdemucs", device="auto")
+def test_load_model_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
-    processor._load_separator()
+    monkeypatch.setattr(
+        ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
+    )
+    processor = ConvTasNetLyricsProcessor(device="auto")
+
+    processor._load_model()
 
     assert processor._device == "cpu"
-    assert len(instances) == 1
-    assert instances[0].model == "htdemucs"
+    assert processor._model_sample_rate == 8_000
+    assert processor._model is not None
 
 
-def test_load_separator_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch) -> None:
-    instances: list = []
-    _install_fake_demucs(monkeypatch, instances)
-    processor = HTDemucsProcessor(device="cpu")
+def test_load_model_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
-    processor._load_separator()
+    monkeypatch.setattr(
+        ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
+    )
+    processor = ConvTasNetLyricsProcessor(device="cpu")
+
+    processor._load_model()
 
     assert processor._device == "cpu"
 
 
-def test_load_separator_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    instances: list = []
-    _install_fake_demucs(monkeypatch, instances)
-    processor = HTDemucsProcessor(device="cuda")
+def test_load_model_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
+
+    monkeypatch.setattr(
+        ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
+    )
+    processor = ConvTasNetLyricsProcessor(device="cuda")
 
     with pytest.raises(RuntimeError, match="cannot see a GPU"):
-        processor._load_separator()
+        processor._load_model()
 
 
-def test_run_inference_without_separator_raises() -> None:
-    processor = HTDemucsProcessor()
-    with pytest.raises(RuntimeError, match="Demucs separator is not loaded"):
+def test_run_inference_without_model_raises() -> None:
+    processor = ConvTasNetLyricsProcessor()
+    with pytest.raises(RuntimeError, match="ConvTasNet model is not loaded"):
         processor._run_inference(array("f", [0.0, 0.0]), 1_000, 2)
 
 
@@ -315,66 +295,94 @@ def _install_fake_torchaudio(monkeypatch: pytest.MonkeyPatch, resample) -> None:
     monkeypatch.setitem(sys.modules, "torchaudio.functional", fake_functional)
 
 
+def test_run_inference_raises_on_unexpected_output_rank(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+
+    def unexpected_resample(*a, **k):
+        raise AssertionError("resample should not be called when rates match")
+
+    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
+
+    class FakeModel:
+        def __call__(self, waveform):
+            return torch.zeros(2, 2)
+
+    processor = ConvTasNetLyricsProcessor()
+    processor._model = FakeModel()
+    processor._model_sample_rate = 1_000
+    processor._device = "cpu"
+
+    with pytest.raises(RuntimeError, match="Expected ConvTasNet output"):
+        processor._run_inference(array("f", [0.1, 0.2, 0.3, 0.4]), 1_000, 2)
+
+
+def test_run_inference_raises_when_source_index_exceeds_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torch
+
+    def unexpected_resample(*a, **k):
+        raise AssertionError("resample should not be called when rates match")
+
+    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
+
+    class FakeModel:
+        def __call__(self, waveform):
+            batch, channels, frames = waveform.shape
+            return torch.zeros(batch, 1, channels, frames)
+
+    processor = ConvTasNetLyricsProcessor(vocal_source_index=0, accompaniment_source_index=1)
+    processor._model = FakeModel()
+    processor._model_sample_rate = 1_000
+    processor._device = "cpu"
+
+    with pytest.raises(RuntimeError, match="source index exceeds model output count"):
+        processor._run_inference(array("f", [0.1, 0.2, 0.3, 0.4]), 1_000, 2)
+
+
+def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+
+    def unexpected_resample(*a, **k):
+        raise AssertionError("resample should not be called when rates match")
+
+    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
+
+    class FakeModel:
+        def __call__(self, waveform):
+            batch, channels, frames = waveform.shape
+            return torch.zeros(batch, 2, channels, frames)
+
+    processor = ConvTasNetLyricsProcessor(vocal_reduction=1.0)
+    processor._model = FakeModel()
+    processor._model_sample_rate = 1_000
+    processor._device = "cpu"
+
+    samples = array("f", [0.1, 0.2, 0.3, 0.4])
+    result = processor._run_inference(samples, sample_rate=1_000, channels=2)
+
+    assert len(result) == len(samples)
+
+
 def test_run_inference_runs_real_torch_path_with_resample_and_padding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import torch
 
-    class FakeSeparator:
-        samplerate = 2_000
-
-        def separate_tensor(self, waveform, *, sr):
-            vocals = torch.zeros_like(waveform)
-            return waveform, {"vocals": vocals}
-
     _install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
 
-    processor = HTDemucsProcessor(vocal_reduction=1.0)
-    processor._separator = FakeSeparator()
+    class FakeModel:
+        def __call__(self, waveform):
+            batch, channels, frames = waveform.shape
+            return torch.zeros(batch, 2, channels, frames)
+
+    processor = ConvTasNetLyricsProcessor(vocal_reduction=1.0)
+    processor._model = FakeModel()
+    processor._model_sample_rate = 2_000
+    processor._device = "cpu"
 
     samples = array("f", [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
     result = processor._run_inference(samples, sample_rate=1_000, channels=2)
 
     assert len(result) == len(samples)
     assert all(-1.0 <= value <= 1.0 for value in result)
-
-
-def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.MonkeyPatch) -> None:
-    import torch
-
-    class FakeSeparator:
-        samplerate = 1_000
-
-        def separate_tensor(self, waveform, *, sr):
-            vocals = torch.zeros_like(waveform)
-            return waveform, {"vocals": vocals}
-
-    def unexpected_resample(*args, **kwargs):
-        raise AssertionError("resample should not be called when rates match")
-
-    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
-
-    processor = HTDemucsProcessor(vocal_reduction=1.0)
-    processor._separator = FakeSeparator()
-
-    samples = array("f", [0.1, 0.2, 0.3, 0.4])
-    result = processor._run_inference(samples, sample_rate=1_000, channels=2)
-
-    assert len(result) == len(samples)
-    assert list(result) == pytest.approx(list(samples), abs=1e-6)
-
-
-def test_run_inference_raises_when_vocals_stem_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeSeparator:
-        samplerate = 1_000
-
-        def separate_tensor(self, waveform, *, sr):
-            return waveform, {}
-
-    _install_fake_torchaudio(monkeypatch, resample=lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
-
-    processor = HTDemucsProcessor()
-    processor._separator = FakeSeparator()
-
-    with pytest.raises(RuntimeError, match="did not return a vocals stem"):
-        processor._run_inference(array("f", [0.1, 0.2, 0.3, 0.4]), 1_000, 2)
