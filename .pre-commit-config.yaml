@@ -9,7 +9,7 @@ repos:
         always_run: true
       - id: cargo-test-coverage
         name: cargo llvm-cov (100% coverage required on protocol.rs/network.rs)
-        entry: bash -c '. "$HOME/.cargo/env" 2>/dev/null; cd client && cargo llvm-cov --ignore-filename-regex "main\.rs$" --fail-under-lines 100'
+        entry: scripts/check-rust-coverage.sh
         language: system
         pass_filenames: false
         always_run: true
