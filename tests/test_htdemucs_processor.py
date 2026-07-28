@@ -8,6 +8,7 @@ import pytest
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket
 from audio_trombone.processors.htdemucs import HTDemucsProcessor
+from conftest import install_fake_torchaudio
 
 
 def make_media_packet(sequence: int, samples: list[float]) -> MediaPacket:
@@ -306,15 +307,6 @@ def test_run_inference_without_separator_raises() -> None:
         processor._run_inference(array("f", [0.0, 0.0]), 1_000, 2)
 
 
-def _install_fake_torchaudio(monkeypatch: pytest.MonkeyPatch, resample) -> None:
-    fake_functional = types.ModuleType("torchaudio.functional")
-    fake_functional.resample = resample
-    fake_torchaudio = types.ModuleType("torchaudio")
-    fake_torchaudio.functional = fake_functional
-    monkeypatch.setitem(sys.modules, "torchaudio", fake_torchaudio)
-    monkeypatch.setitem(sys.modules, "torchaudio.functional", fake_functional)
-
-
 def test_run_inference_runs_real_torch_path_with_resample_and_padding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -327,7 +319,7 @@ def test_run_inference_runs_real_torch_path_with_resample_and_padding(
             vocals = torch.zeros_like(waveform)
             return waveform, {"vocals": vocals}
 
-    _install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
+    install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
 
     processor = HTDemucsProcessor(vocal_reduction=1.0)
     processor._separator = FakeSeparator()
@@ -352,7 +344,7 @@ def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.Monke
     def unexpected_resample(*args, **kwargs):
         raise AssertionError("resample should not be called when rates match")
 
-    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
+    install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
 
     processor = HTDemucsProcessor(vocal_reduction=1.0)
     processor._separator = FakeSeparator()
@@ -371,7 +363,7 @@ def test_run_inference_raises_when_vocals_stem_missing(monkeypatch: pytest.Monke
         def separate_tensor(self, waveform, *, sr):
             return waveform, {}
 
-    _install_fake_torchaudio(monkeypatch, resample=lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
+    install_fake_torchaudio(monkeypatch, resample=lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
 
     processor = HTDemucsProcessor()
     processor._separator = FakeSeparator()

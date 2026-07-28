@@ -1,12 +1,11 @@
 from array import array
 import asyncio
-import sys
 import time
-import types
 import pytest
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.mdx23c_vocals import MDX23CVocalsProcessor
+from conftest import install_fake_torchaudio
 
 def packet(sequence: int, value: float = 1.0, sample_rate: int = 100) -> MediaPacket:
     header=bytearray(HEADER_SIZE); header[:4]=b'KANY'; header[4]=1; header[6]=2; header[7]=1
@@ -219,12 +218,9 @@ def test_run_inference_runs_real_torch_path(monkeypatch: pytest.MonkeyPatch) -> 
         def infer(self, waveform, sample_rate):
             return waveform.unsqueeze(1)
 
-    fake_functional = types.ModuleType("torchaudio.functional")
-    fake_functional.resample = lambda tensor, orig_freq, new_freq: tensor[..., :-1]
-    fake_torchaudio = types.ModuleType("torchaudio")
-    fake_torchaudio.functional = fake_functional
-    monkeypatch.setitem(sys.modules, "torchaudio", fake_torchaudio)
-    monkeypatch.setitem(sys.modules, "torchaudio.functional", fake_functional)
+    install_fake_torchaudio(
+        monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1]
+    )
 
     processor = MDX23CVocalsProcessor(segment_seconds=0.25, vocal_reduction=1.0)
     processor._adapter = FakeAdapter()

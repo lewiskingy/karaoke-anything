@@ -1,13 +1,13 @@
 from array import array
 import asyncio
 import sys
-import types
 
 import pytest
 
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.convtasnet_lyrics import ConvTasNetLyricsProcessor
+from conftest import install_fake_torchaudio
 
 
 def make_media_packet(sequence: int, samples: list[float], sample_rate: int = 1_000) -> MediaPacket:
@@ -286,22 +286,13 @@ def test_run_inference_without_model_raises() -> None:
         processor._run_inference(array("f", [0.0, 0.0]), 1_000, 2)
 
 
-def _install_fake_torchaudio(monkeypatch: pytest.MonkeyPatch, resample) -> None:
-    fake_functional = types.ModuleType("torchaudio.functional")
-    fake_functional.resample = resample
-    fake_torchaudio = types.ModuleType("torchaudio")
-    fake_torchaudio.functional = fake_functional
-    monkeypatch.setitem(sys.modules, "torchaudio", fake_torchaudio)
-    monkeypatch.setitem(sys.modules, "torchaudio.functional", fake_functional)
-
-
 def test_run_inference_raises_on_unexpected_output_rank(monkeypatch: pytest.MonkeyPatch) -> None:
     import torch
 
     def unexpected_resample(*a, **k):
         raise AssertionError("resample should not be called when rates match")
 
-    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
+    install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
 
     class FakeModel:
         def __call__(self, waveform):
@@ -324,7 +315,7 @@ def test_run_inference_raises_when_source_index_exceeds_count(
     def unexpected_resample(*a, **k):
         raise AssertionError("resample should not be called when rates match")
 
-    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
+    install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
 
     class FakeModel:
         def __call__(self, waveform):
@@ -346,7 +337,7 @@ def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.Monke
     def unexpected_resample(*a, **k):
         raise AssertionError("resample should not be called when rates match")
 
-    _install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
+    install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
 
     class FakeModel:
         def __call__(self, waveform):
@@ -369,7 +360,7 @@ def test_run_inference_runs_real_torch_path_with_resample_and_padding(
 ) -> None:
     import torch
 
-    _install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
+    install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
 
     class FakeModel:
         def __call__(self, waveform):
