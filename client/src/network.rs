@@ -253,6 +253,17 @@ mod tests {
 
     #[test]
     fn sender_loop_continues_through_recv_timeout() {
+        // This sleep only needs to outlast thread *scheduling* latency
+        // (routinely sub-millisecond) to guarantee the spawned thread's
+        // first `running.load()` check reads `true` before this thread
+        // flips it - otherwise the two racing loads can flip it before the
+        // spawned thread ever checks, skipping `recv_timeout` (and its
+        // `Timeout` arm) entirely. It does not need to outlast the 100ms
+        // internal `recv_timeout` itself: once the spawned thread has
+        // observed `running == true` and entered the loop body, `running`
+        // is only re-checked after that call returns, so `join()` below
+        // naturally waits out the rest with no further sleep-vs-runner-load
+        // race.
         let (_tx, rx) = crossbeam_channel::bounded::<Vec<f32>>(1);
         let socket = FakeSocket::send_only(None);
         let running = Arc::new(AtomicBool::new(true));
@@ -260,7 +271,7 @@ mod tests {
 
         std::thread::scope(|scope| {
             let handle = scope.spawn(|| sender_loop(&socket, addr(), rx, running, 2, 48_000, 1));
-            std::thread::sleep(Duration::from_millis(150));
+            std::thread::sleep(Duration::from_millis(20));
             stopper.store(false, Ordering::SeqCst);
             assert!(handle.join().unwrap().is_ok());
         });
@@ -470,7 +481,21 @@ mod tests {
                     1024,
                 )
             });
-            std::thread::sleep(Duration::from_millis(150));
+
+            // Poll for the actual observable effect (the packet landing in
+            // the queue) instead of sleeping a fixed duration: a loaded
+            // runner could take longer than any fixed sleep to schedule the
+            // receiver thread, and there's no reason to wait longer than
+            // necessary once it has.
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while queue.lock().unwrap().is_empty() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "receiver_loop did not buffer the packet before the deadline"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
             stopper.store(false, Ordering::SeqCst);
             handle.join().unwrap().unwrap();
         });
