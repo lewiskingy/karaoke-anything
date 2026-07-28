@@ -76,6 +76,9 @@ def test_rejects_unsupported_precision() -> None:
 def test_rejects_cuda_when_unavailable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     config_path = _write_config(tmp_path, ["vocals", "instrumental"])
     with pytest.raises(RuntimeError, match="cannot see a GPU"):
         MDX23CAdapter(config_path, tmp_path / "missing.ckpt", device="cuda")
@@ -94,6 +97,9 @@ def test_rejects_reduced_precision_without_cuda(
 def test_constructor_auto_selects_cpu_and_loads_checkpoint_strictly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     adapter = _build_adapter(monkeypatch, tmp_path, device="auto")
 
     assert adapter.device == "cpu"

@@ -104,9 +104,9 @@ The image downloads `cadenzachallenge/ConvTasNet_Lyrics_Causal` during build and
 
 The image also downloads only the pinned MDX23C 8KFFT YAML and checkpoint into
 `/models/mdx23c`, copies the pinned upstream MDX23C architecture module, and
-strictly loads the checkpoint on CPU during the build. This is a Stage 0
-compatibility proof only; MDX23C is not registered as a processor. Repeat the
-proof offline after building with:
+strictly loads the checkpoint on CPU during the build, as an offline
+compatibility smoke test independent of the `mdx23c-vocals` processor's own
+runtime model loading. Repeat the proof offline after building with:
 
 ```bash
 docker compose -f compose.yaml -f compose.demucs.yaml run --rm --no-deps \

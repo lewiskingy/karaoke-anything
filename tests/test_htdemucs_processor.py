@@ -271,6 +271,9 @@ def test_load_separator_raises_when_demucs_dependencies_missing(
 
 
 def test_load_separator_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     instances: list = []
     _install_fake_demucs(monkeypatch, instances)
     processor = HTDemucsProcessor(model_name="htdemucs", device="auto")
@@ -293,6 +296,9 @@ def test_load_separator_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPa
 
 
 def test_load_separator_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     instances: list = []
     _install_fake_demucs(monkeypatch, instances)
     processor = HTDemucsProcessor(device="cuda")

@@ -236,6 +236,7 @@ def _tiny_model():
 def test_load_model_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
     from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(
         ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
     )
@@ -264,6 +265,7 @@ def test_load_model_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch)
 def test_load_model_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(
         ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
     )
