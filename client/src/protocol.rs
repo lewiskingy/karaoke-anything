@@ -23,6 +23,13 @@ pub fn encode_packet(
     frames: u16,
     samples: &[f32],
 ) -> Result<Vec<u8>> {
+    if channels == 0 || channels > u8::MAX as u16 {
+        bail!("channel count must be between 1 and 255");
+    }
+    if frames == 0 {
+        bail!("frame count must be greater than zero");
+    }
+
     let expected_samples = frames as usize * channels as usize;
     if samples.len() != expected_samples {
         bail!(
@@ -31,9 +38,6 @@ pub fn encode_packet(
             frames,
             channels
         );
-    }
-    if channels == 0 || channels > u8::MAX as u16 {
-        bail!("channel count must be between 1 and 255");
     }
 
     let mut output = Vec::with_capacity(HEADER_SIZE + samples.len() * 4);
@@ -143,6 +147,12 @@ mod tests {
         let samples = vec![0.0; 256];
         let error = encode_packet(256, 48_000, 0, 0, 1, &samples).unwrap_err();
         assert!(error.to_string().contains("channel count"));
+    }
+
+    #[test]
+    fn encode_rejects_zero_frames() {
+        let error = encode_packet(2, 48_000, 0, 0, 0, &[]).unwrap_err();
+        assert!(error.to_string().contains("frame count"));
     }
 
     #[test]
