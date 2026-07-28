@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from audio_trombone.mdx23c import MDX23CAdapter
+from audio_trombone.mdx23c import MDX23CAdapter, _autocast_context
 
 
 class _FakeModel:
@@ -191,3 +191,17 @@ def test_stem_index_raises_when_nothing_matches(
     adapter = _build_adapter(monkeypatch, tmp_path, instruments=["vocals", "other"])
     with pytest.raises(RuntimeError, match="none of"):
         adapter.stem_index("instrumental", "accompaniment")
+
+
+def test_autocast_context_is_null_for_float32() -> None:
+    import contextlib
+
+    assert isinstance(_autocast_context("float32"), contextlib.nullcontext)
+
+
+def test_autocast_context_selects_dtype_for_reduced_precision() -> None:
+    import torch
+
+    context = _autocast_context("float16")
+
+    assert isinstance(context, torch.autocast)

@@ -15,6 +15,12 @@ InferenceFunction = Callable[[array, int, int], array]
 SUPPORTED_SEGMENTS = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0)
 
 
+def _raise_first_failure(checks: tuple[tuple[bool, str], ...]) -> None:
+    for passed, message in checks:
+        if not passed:
+            raise ValueError(message)
+
+
 class MDX23CVocalsProcessor(AudioProcessor):
     name = "mdx23c-vocals"
     description = (
@@ -30,16 +36,19 @@ class MDX23CVocalsProcessor(AudioProcessor):
                  vocal_reduction: float = 1.0, precision: str = "float32",
                  warm_up: bool = False, max_buffered_segments: int = 3,
                  inference_fn: InferenceFunction | None = None) -> None:
-        if segment_seconds not in SUPPORTED_SEGMENTS:
-            raise ValueError(f"segment_seconds must be one of {SUPPORTED_SEGMENTS}")
-        if not 0 <= overlap < 0.5:
-            raise ValueError("overlap must be between 0.0 and less than 0.5")
-        if batch_size != 1:
-            raise ValueError("batch_size must be 1 for paced interactive processing")
-        if not 0 <= vocal_reduction <= 1:
-            raise ValueError("vocal_reduction must be between 0.0 and 1.0")
-        if precision not in {"float32", "float16", "bfloat16"}:
-            raise ValueError("precision must be float32, float16, or bfloat16")
+        _raise_first_failure((
+            (
+                segment_seconds in SUPPORTED_SEGMENTS,
+                f"segment_seconds must be one of {SUPPORTED_SEGMENTS}",
+            ),
+            (0 <= overlap < 0.5, "overlap must be between 0.0 and less than 0.5"),
+            (batch_size == 1, "batch_size must be 1 for paced interactive processing"),
+            (0 <= vocal_reduction <= 1, "vocal_reduction must be between 0.0 and 1.0"),
+            (
+                precision in {"float32", "float16", "bfloat16"},
+                "precision must be float32, float16, or bfloat16",
+            ),
+        ))
         self.config_path, self.checkpoint_path = config_path, checkpoint_path
         self.requested_device, self.device = device, device
         self.segment_seconds, self.overlap = segment_seconds, overlap
@@ -89,21 +98,46 @@ class MDX23CVocalsProcessor(AudioProcessor):
         self._input_frames = 0; self._rate = self._channels = None
         self._previous_tail = None; self.last_error = None
 
-    async def process(self, packet: MediaPacket) -> AsyncIterator[ProcessedPacket]:
-        await self._harvest()
-        try: decoded = KanyPacket.decode(packet.payload)
-        except KanyProtocolError as exc: raise ValueError(f"MDX23C requires KANY v1 f32 PCM: {exc}") from exc
-        if decoded.channels != 2: raise ValueError("MDX23C requires stereo input")
-        if self._rate is None: self._rate, self._channels = decoded.sample_rate, decoded.channels
-        elif (decoded.sample_rate, decoded.channels) != (self._rate, self._channels):
-            await self.reset(); raise ValueError("audio format changed; MDX23C state was reset")
-        self._input.append(decoded); self._input_frames += decoded.frames
+    @staticmethod
+    def _decode_stereo_packet(payload: bytes) -> KanyPacket:
+        try:
+            decoded = KanyPacket.decode(payload)
+        except KanyProtocolError as exc:
+            raise ValueError(f"MDX23C requires KANY v1 f32 PCM: {exc}") from exc
+        if decoded.channels != 2:
+            raise ValueError("MDX23C requires stereo input")
+        return decoded
+
+    async def _track_stream_format(self, decoded: KanyPacket) -> None:
+        if self._rate is None:
+            self._rate, self._channels = decoded.sample_rate, decoded.channels
+            return
+        if (decoded.sample_rate, decoded.channels) != (self._rate, self._channels):
+            await self.reset()
+            raise ValueError("audio format changed; MDX23C state was reset")
+
+    def _buffer_packet(self, decoded: KanyPacket) -> None:
+        self._input.append(decoded)
+        self._input_frames += decoded.frames
         maximum = round(decoded.sample_rate * self.segment_seconds * self.max_buffered_segments)
         while self._input_frames > maximum and self._input:
-            dropped = self._input.popleft(); self._input_frames -= dropped.frames; self.dropped_packets += 1
-        if self._task is None and self._input_frames >= self._target_frames(): self._launch()
-        if self._ready: yield self._ready.popleft()
-        elif self._task is not None: self.underruns += 1
+            dropped = self._input.popleft()
+            self._input_frames -= dropped.frames
+            self.dropped_packets += 1
+
+    async def process(self, packet: MediaPacket) -> AsyncIterator[ProcessedPacket]:
+        await self._harvest()
+        decoded = self._decode_stereo_packet(packet.payload)
+        await self._track_stream_format(decoded)
+        self._buffer_packet(decoded)
+
+        if self._task is None and self._input_frames >= self._target_frames():
+            self._launch()
+
+        if self._ready:
+            yield self._ready.popleft()
+        elif self._task is not None:
+            self.underruns += 1
 
     async def flush(self) -> AsyncIterator[ProcessedPacket]:
         await self._harvest()
