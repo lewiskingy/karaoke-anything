@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from audio_trombone.tools.prepare_mdx23c_architecture import (
     EXPECTED_IMPORT,
     main,
@@ -29,7 +28,10 @@ def _prepared_helper(tmp_path: Path):
         if isinstance(node, ast.FunctionDef) and node.name == "prefer_target_instrument"
     )
     namespace = {}
-    exec(
+    # Executing the just-extracted helper function's own AST is the only way
+    # to unit test the source `prepare()` embeds into the architecture file,
+    # short of writing and re-importing a temporary module.
+    exec(  # noqa: S102
         compile(ast.Module(body=[helper], type_ignores=[]), str(architecture), "exec"),
         namespace,
     )

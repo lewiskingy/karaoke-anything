@@ -14,12 +14,12 @@ buffered input when overfull -- neither of which this base class supports.
 A change here to segment bookkeeping is likely needed there too.
 """
 
-from array import array
 import asyncio
-from collections import deque
 import logging
 import time
-from typing import AsyncIterator
+from array import array
+from collections import deque
+from collections.abc import AsyncIterator
 
 from audio_trombone.kany import KanyPacket
 from audio_trombone.models import MediaPacket, ProcessedPacket
@@ -50,7 +50,7 @@ class SegmentedInferenceProcessor(AudioProcessor):
         self._input_packets: deque[KanyPacket] = deque()
         self._input_frames = 0
         self._ready_output: deque[ProcessedPacket] = deque()
-        self._inference_task: "asyncio.Task[array] | None" = None
+        self._inference_task: asyncio.Task[array] | None = None
         self._active_packets: list[KanyPacket] = []
         self._stream_sample_rate: int | None = None
         self._stream_channels: int | None = None
@@ -74,7 +74,10 @@ class SegmentedInferenceProcessor(AudioProcessor):
             self._inference_task.cancel()
             try:
                 await self._inference_task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
+                # Cancelling and awaiting our own task: whatever it raises
+                # (cancellation or a real failure) is expected here, and
+                # this is reset -- there's no meaningful way to surface it.
                 pass
         self._inference_task = None
         self._active_packets.clear()

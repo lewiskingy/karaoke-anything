@@ -1,5 +1,4 @@
 import pytest
-
 from audio_trombone.config import Settings
 from audio_trombone.processors.registry import ProcessorRegistry
 

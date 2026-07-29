@@ -1,10 +1,9 @@
-from array import array
 import asyncio
 import sys
 import types
+from array import array
 
 import pytest
-
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket
 from audio_trombone.processors.htdemucs import HTDemucsConfig, HTDemucsProcessor

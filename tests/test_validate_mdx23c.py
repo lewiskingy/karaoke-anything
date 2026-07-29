@@ -2,9 +2,9 @@ import runpy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
-
 from audio_trombone.mdx23c_model_yaml import YamlConfig, _wrap, load_config
 from audio_trombone.tools import validate_mdx23c
 from audio_trombone.tools.validate_mdx23c import main, normalise_state_dict, validate
@@ -56,7 +56,7 @@ def test_config_getattr_returns_present_key():
 def test_config_getattr_raises_attribute_error_for_missing_key():
     config = YamlConfig({})
     with pytest.raises(AttributeError, match="missing"):
-        config.missing
+        config.missing  # noqa: B018 -- the attribute access is the thing under test
 
 
 def test_config_recursively_wraps_nested_mappings_and_lists():
@@ -100,7 +100,7 @@ def test_load_config_rejects_non_mapping_document(tmp_path: Path):
 
 
 class _FakeModel:
-    instances: list["_FakeModel"] = []
+    instances: ClassVar[list["_FakeModel"]] = []
 
     def __init__(self, config) -> None:
         self.config = config

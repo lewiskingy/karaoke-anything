@@ -33,5 +33,7 @@ def load_config(path: Path) -> YamlConfig:
     with path.open("r", encoding="utf-8") as stream:
         document = yaml.safe_load(stream)
     if not isinstance(document, Mapping):
-        raise ValueError("MDX23C config must be a YAML mapping")
+        # ValueError, not TypeError: this rejects malformed *file content*,
+        # not a Python argument of the wrong type.
+        raise ValueError("MDX23C config must be a YAML mapping")  # noqa: TRY004
     return _wrap(document)

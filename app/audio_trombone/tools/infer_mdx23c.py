@@ -1,8 +1,8 @@
 """Run pinned MDX23C offline on a stereo PCM WAV and write individual stems."""
 
 import argparse
-from pathlib import Path
 import wave
+from pathlib import Path
 
 from audio_trombone.mdx23c import MDX23CAdapter
 

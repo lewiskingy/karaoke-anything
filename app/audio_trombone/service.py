@@ -1,7 +1,7 @@
 import asyncio
-from dataclasses import asdict, dataclass, replace
 import logging
 import time
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from audio_trombone.config import Settings
@@ -331,8 +331,10 @@ class TromboneService:
             (
                 (
                     settings.mdx23c_segment_seconds in SUPPORTED_SEGMENTS,
-                    "MDX23C segment_seconds must be one of "
-                    f"{', '.join(str(value) for value in SUPPORTED_SEGMENTS)}",
+                    (
+                        "MDX23C segment_seconds must be one of "
+                        f"{', '.join(str(value) for value in SUPPORTED_SEGMENTS)}"
+                    ),
                 ),
                 (
                     0 <= settings.mdx23c_overlap < 0.5,

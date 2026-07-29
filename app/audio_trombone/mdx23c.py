@@ -33,6 +33,7 @@ def _resolve_device(requested_device: str, precision: MDX23CPrecision) -> str:
 def _load_model(config: Any, checkpoint_path: Path, device: str) -> Any:
     """Constructs the pinned architecture and strictly loads the checkpoint onto it."""
     import torch
+
     from audio_trombone.vendor.mdx23c_tfc_tdf_v3 import TFC_TDF_net
 
     model = TFC_TDF_net(config)

@@ -3,7 +3,6 @@ import types
 from pathlib import Path
 
 import pytest
-
 from audio_trombone.mdx23c import MDX23CAdapter, _autocast_context
 
 

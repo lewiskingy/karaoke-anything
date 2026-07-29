@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator
 
 from audio_trombone.models import MediaPacket, ProcessedPacket
 

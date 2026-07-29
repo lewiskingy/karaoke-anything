@@ -1,7 +1,6 @@
 from array import array
 
 import pytest
-
 from audio_trombone import kany
 from audio_trombone.kany import HEADER_SIZE, KanyPacket, KanyProtocolError
 

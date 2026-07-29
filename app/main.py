@@ -1,17 +1,14 @@
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
+from audio_trombone.config import Settings
+from audio_trombone.service import RUNTIME_SETTING_GROUPS, TromboneService
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
-
-from audio_trombone.config import Settings
-from audio_trombone.service import RUNTIME_SETTING_GROUPS, TromboneService
-
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),

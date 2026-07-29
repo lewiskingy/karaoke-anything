@@ -18,9 +18,9 @@
 import math
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from huggingface_hub import PyTorchModelHubMixin
+from torch import nn
 
 EPS = 1e-8
 

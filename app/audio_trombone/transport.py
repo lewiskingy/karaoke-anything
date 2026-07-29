@@ -3,7 +3,6 @@ import logging
 
 from audio_trombone.models import MediaPacket, Metrics
 
-
 logger = logging.getLogger(__name__)
 
 

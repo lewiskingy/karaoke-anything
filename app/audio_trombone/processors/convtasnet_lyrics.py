@@ -1,8 +1,8 @@
-from array import array
 import asyncio
+import logging
+from array import array
 from collections.abc import Callable
 from dataclasses import dataclass
-import logging
 from typing import Any
 
 from audio_trombone.kany import KanyPacket, KanyProtocolError
@@ -129,6 +129,7 @@ class ConvTasNetLyricsProcessor(SegmentedInferenceProcessor):
     def _load_model(self) -> None:
         try:
             import torch
+
             from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
         except ImportError as exc:
             raise RuntimeError(

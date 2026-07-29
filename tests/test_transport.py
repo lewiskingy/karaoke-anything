@@ -3,7 +3,6 @@ import time
 from types import SimpleNamespace
 
 import pytest
-
 from audio_trombone.models import Metrics
 from audio_trombone.transport import UdpIngressProtocol
 

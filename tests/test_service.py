@@ -2,7 +2,6 @@ import asyncio
 import time
 
 import pytest
-
 from audio_trombone.config import Settings
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities
@@ -10,13 +9,13 @@ from audio_trombone.service import TromboneService
 
 
 def make_service(**overrides) -> TromboneService:
-    defaults = dict(
-        listen_host="127.0.0.1",
-        input_port=0,
-        output_port=59_999,
-        input_queue_size=8,
-        processor="passthrough",
-    )
+    defaults = {
+        "listen_host": "127.0.0.1",
+        "input_port": 0,
+        "output_port": 59_999,
+        "input_queue_size": 8,
+        "processor": "passthrough",
+    }
     defaults.update(overrides)
     return TromboneService(Settings(**defaults))
 

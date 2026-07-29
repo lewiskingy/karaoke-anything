@@ -1,12 +1,12 @@
 """Finite-window, non-causal MDX23C vocal-reduction processor."""
 
-from array import array
 import asyncio
-from collections import deque
-from collections.abc import Callable
-from dataclasses import dataclass
 import time
-from typing import Any, AsyncIterator, get_args
+from array import array
+from collections import deque
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
+from typing import Any, get_args
 
 from audio_trombone.kany import HEADER_SIZE, KanyPacket, KanyProtocolError
 from audio_trombone.mdx23c import MDX23CPrecision
@@ -163,7 +163,10 @@ class MDX23CVocalsProcessor(AudioProcessor):
             self._inference_task.cancel()
             try:
                 await self._inference_task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
+                # Cancelling and awaiting our own task: whatever it raises
+                # (cancellation or a real failure) is expected here, and
+                # this is reset -- there's no meaningful way to surface it.
                 pass
         self._inference_task = None
         self._active_packets.clear()

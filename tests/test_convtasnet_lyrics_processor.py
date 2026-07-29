@@ -1,10 +1,9 @@
-from array import array
 import asyncio
 import sys
+from array import array
 
 import pytest
 import torch
-
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.convtasnet_lyrics import (

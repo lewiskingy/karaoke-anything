@@ -1,6 +1,6 @@
+import sys
 from array import array
 from dataclasses import dataclass
-import sys
 
 # KANY packet layout (big-endian header, little-endian f32 samples):
 #   0..4   magic ("KANY")

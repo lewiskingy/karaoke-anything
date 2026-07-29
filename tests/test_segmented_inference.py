@@ -1,7 +1,6 @@
 from array import array
 
 import pytest
-
 from audio_trombone.processors.base import ProcessorCapabilities
 from audio_trombone.processors.segmented_inference import SegmentedInferenceProcessor
 

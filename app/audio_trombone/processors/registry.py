@@ -9,11 +9,11 @@ from audio_trombone.processors.convtasnet_lyrics import (
 )
 from audio_trombone.processors.delay import DelayPassthroughProcessor
 from audio_trombone.processors.htdemucs import HTDemucsConfig, HTDemucsProcessor
-from audio_trombone.processors.null import NullProcessor
 from audio_trombone.processors.mdx23c_vocals import (
     MDX23CVocalsConfig,
     MDX23CVocalsProcessor,
 )
+from audio_trombone.processors.null import NullProcessor
 from audio_trombone.processors.passthrough import PassthroughProcessor
 
 ProcessorFactory = Callable[[], AudioProcessor]

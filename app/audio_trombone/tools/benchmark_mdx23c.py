@@ -1,9 +1,9 @@
 """Target-host MDX23C segment benchmark; emits readable lines and JSON."""
 
 import argparse
-from dataclasses import dataclass
 import json
 import time
+from dataclasses import dataclass
 
 
 def _parse_args() -> argparse.Namespace:
@@ -45,6 +45,7 @@ def main() -> None:
     args = _parse_args()
 
     import torch
+
     from audio_trombone.mdx23c import MDX23CAdapter
 
     load_started = time.perf_counter()

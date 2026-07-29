@@ -1,7 +1,7 @@
-from dataclasses import dataclass
 import importlib
 import runpy
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 import pytest

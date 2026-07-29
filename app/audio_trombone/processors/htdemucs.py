@@ -1,8 +1,8 @@
-from array import array
 import asyncio
+import logging
+from array import array
 from collections.abc import Callable
 from dataclasses import dataclass
-import logging
 from typing import Any
 
 from audio_trombone.kany import KanyPacket, KanyProtocolError
