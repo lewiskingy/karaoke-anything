@@ -1,40 +1,98 @@
-from array import array
 import asyncio
 import time
+from array import array
+
 import pytest
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket, ProcessedPacket
-from audio_trombone.processors.mdx23c_vocals import MDX23CVocalsProcessor
+from audio_trombone.processors.mdx23c_vocals import (
+    MDX23CVocalsConfig,
+    MDX23CVocalsProcessor,
+)
 from conftest import install_fake_torchaudio
 
+
+def make_processor(**kwargs) -> MDX23CVocalsProcessor:
+    inference_fn = kwargs.pop("inference_fn", None)
+    return MDX23CVocalsProcessor(
+        config=MDX23CVocalsConfig(**kwargs), inference_fn=inference_fn
+    )
+
+
 def packet(sequence: int, value: float = 1.0, sample_rate: int = 100) -> MediaPacket:
-    header=bytearray(HEADER_SIZE); header[:4]=b'KANY'; header[4]=1; header[6]=2; header[7]=1
-    header[8:12]=sample_rate.to_bytes(4,'big'); header[12:16]=sequence.to_bytes(4,'big'); header[24:26]=(25).to_bytes(2,'big')
-    return MediaPacket.received(bytes(header)+array('f',[value]*50).tobytes(),'127.0.0.1',40000)
+    header = bytearray(HEADER_SIZE)
+    header[:4] = b"KANY"
+    header[4] = 1
+    header[6] = 2
+    header[7] = 1
+    header[8:12] = sample_rate.to_bytes(4, "big")
+    header[12:16] = sequence.to_bytes(4, "big")
+    header[24:26] = (25).to_bytes(2, "big")
+    return MediaPacket.received(
+        bytes(header) + array("f", [value] * 50).tobytes(), "127.0.0.1", 40000
+    )
+
 
 async def collect(processor: MDX23CVocalsProcessor, media_packet: MediaPacket):
     return [output async for output in processor.process(media_packet)]
 
-@pytest.mark.parametrize('seconds',[0.1,0.3,3.0])
+
+@pytest.mark.parametrize("seconds", [0.1, 0.3, 3.0])
 def test_rejects_unvalidated_segment_sizes(seconds):
-    with pytest.raises(ValueError, match='one of'): MDX23CVocalsProcessor(segment_seconds=seconds, inference_fn=lambda s,r,c:s)
+    with pytest.raises(ValueError, match="one of"):
+        make_processor(segment_seconds=seconds, inference_fn=lambda s, r, c: s)
+
 
 @pytest.mark.asyncio
 async def test_exact_frames_bounded_buffer_and_reset():
-    processor=MDX23CVocalsProcessor(segment_seconds=.25, max_buffered_segments=1, inference_fn=lambda s,r,c:array('f',[0]*len(s)))
-    await processor.start(); assert [x async for x in processor.process(packet(0))] == []
+    processor = make_processor(
+        segment_seconds=0.25,
+        max_buffered_segments=1,
+        inference_fn=lambda s, r, c: array("f", [0] * len(s)),
+    )
+    await processor.start()
+    assert [x async for x in processor.process(packet(0))] == []
     for _ in range(30):
-        await asyncio.sleep(.002)
-        outputs=[x async for x in processor.process(packet(1))]
-        if outputs: break
-    decoded=KanyPacket.decode(outputs[0].payload); assert decoded.sequence == 0; assert decoded.frames == 25
-    await processor.reset(); diagnostics=processor.diagnostics()
-    assert diagnostics['buffered_input_packets']==0 and diagnostics['ready_output_packets']==0
+        await asyncio.sleep(0.002)
+        outputs = [x async for x in processor.process(packet(1))]
+        if outputs:
+            break
+    decoded = KanyPacket.decode(outputs[0].payload)
+    assert decoded.sequence == 0
+    assert decoded.frames == 25
+    await processor.reset()
+    diagnostics = processor.diagnostics()
+    assert (
+        diagnostics["buffered_input_packets"] == 0
+        and diagnostics["ready_output_packets"] == 0
+    )
     assert processor._previous_tail is None
 
+
+def test_crossfade_skips_blending_when_previous_tail_is_too_short():
+    # Simulates `overlap` growing between segments (e.g. via /api/settings):
+    # the previous segment's tail was sized for the old, smaller overlap, so
+    # it's now shorter than this segment needs and must be skipped rather
+    # than indexed out of range.
+    processor = make_processor(
+        segment_seconds=0.25, overlap=0.25, inference_fn=lambda s, r, c: s
+    )
+    processor._previous_tail = array("f", [0.0])
+    output = array("f", [1.0] * 8)
+
+    processor._crossfade(output)
+
+    assert list(output) == [1.0] * 8
+    assert processor._previous_tail is not None
+
+
 def test_overlap_crossfade():
-    processor=MDX23CVocalsProcessor(segment_seconds=.25, overlap=.25, inference_fn=lambda s,r,c:s)
-    processor._previous_tail=array('f',[0.0]*4); output=array('f',[1.0]*8); processor._crossfade(output)
+    processor = make_processor(
+        segment_seconds=0.25, overlap=0.25, inference_fn=lambda s, r, c: s
+    )
+    processor._previous_tail = array("f", [0.0] * 4)
+    output = array("f", [1.0] * 8)
+    processor._crossfade(output)
     assert 0 < output[0] < 1 and output[-1] == 1
 
 
@@ -49,7 +107,7 @@ def test_overlap_crossfade():
 )
 def test_rejects_invalid_construction_arguments(kwargs, match) -> None:
     with pytest.raises(ValueError, match=match):
-        MDX23CVocalsProcessor(segment_seconds=0.25, inference_fn=lambda s, r, c: s, **kwargs)
+        make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s, **kwargs)
 
 
 class _FakeAdapter:
@@ -64,9 +122,11 @@ class _FakeAdapter:
 
 
 @pytest.mark.asyncio
-async def test_start_loads_adapter_and_sets_device(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_loads_adapter_and_sets_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("audio_trombone.mdx23c.MDX23CAdapter", _FakeAdapter)
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25)
+    processor = make_processor(segment_seconds=0.25)
 
     await processor.start()
 
@@ -76,9 +136,11 @@ async def test_start_loads_adapter_and_sets_device(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_start_with_warm_up_runs_one_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_with_warm_up_runs_one_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr("audio_trombone.mdx23c.MDX23CAdapter", _FakeAdapter)
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, warm_up=True)
+    processor = make_processor(segment_seconds=0.25, warm_up=True)
 
     await processor.start()
 
@@ -88,7 +150,7 @@ async def test_start_with_warm_up_runs_one_inference(monkeypatch: pytest.MonkeyP
 @pytest.mark.asyncio
 async def test_stop_unloads_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("audio_trombone.mdx23c.MDX23CAdapter", _FakeAdapter)
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25)
+    processor = make_processor(segment_seconds=0.25)
     await processor.start()
 
     await processor.stop()
@@ -99,7 +161,7 @@ async def test_stop_unloads_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_kany_payload() -> None:
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
+    processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     bad = MediaPacket.received(b"not-a-kany-packet", "127.0.0.1", 1)
 
     with pytest.raises(ValueError, match="MDX23C requires KANY v1 f32 PCM"):
@@ -108,7 +170,7 @@ async def test_process_rejects_non_kany_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_stereo_input() -> None:
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
+    processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     header = bytearray(HEADER_SIZE)
     header[:4] = b"KANY"
     header[4] = 1
@@ -116,7 +178,9 @@ async def test_process_rejects_non_stereo_input() -> None:
     header[7] = 1
     header[8:12] = (100).to_bytes(4, "big")
     header[24:26] = (1).to_bytes(2, "big")
-    bad = MediaPacket.received(bytes(header) + array("f", [0.0]).tobytes(), "127.0.0.1", 1)
+    bad = MediaPacket.received(
+        bytes(header) + array("f", [0.0]).tobytes(), "127.0.0.1", 1
+    )
 
     with pytest.raises(ValueError, match="requires stereo input"):
         await collect(processor, bad)
@@ -124,13 +188,13 @@ async def test_process_rejects_non_stereo_input() -> None:
 
 @pytest.mark.asyncio
 async def test_process_resets_and_raises_on_format_change() -> None:
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
+    processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     await collect(processor, packet(0, sample_rate=100))
 
     with pytest.raises(ValueError, match="audio format changed"):
         await collect(processor, packet(1, sample_rate=200))
 
-    assert processor._rate is None
+    assert processor._stream_sample_rate is None
 
 
 @pytest.mark.asyncio
@@ -139,7 +203,7 @@ async def test_drops_oldest_packets_when_input_buffer_overflows() -> None:
         time.sleep(0.05)
         return array("f", [0.0] * len(samples))
 
-    processor = MDX23CVocalsProcessor(
+    processor = make_processor(
         segment_seconds=0.25, max_buffered_segments=1, inference_fn=slow
     )
     await processor.start()
@@ -154,9 +218,11 @@ async def test_drops_oldest_packets_when_input_buffer_overflows() -> None:
 
 @pytest.mark.asyncio
 async def test_flush_drains_ready_output() -> None:
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
+    processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     decoded = KanyPacket.decode(packet(0).payload)
-    processor._ready.append(ProcessedPacket(payload=decoded.encode_samples(decoded.samples)))
+    processor._ready_output.append(
+        ProcessedPacket(payload=decoded.encode_samples(decoded.samples))
+    )
 
     flushed = [output async for output in processor.flush()]
 
@@ -165,45 +231,45 @@ async def test_flush_drains_ready_output() -> None:
 
 @pytest.mark.asyncio
 async def test_harvest_wraps_inference_failure() -> None:
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
+    processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     decoded = KanyPacket.decode(packet(0).payload)
-    processor._active = [decoded]
+    processor._active_packets = [decoded]
 
     async def boom() -> array:
         raise ValueError("boom")
 
     task = asyncio.create_task(boom())
     await asyncio.sleep(0)
-    processor._task = task
+    processor._inference_task = task
 
     with pytest.raises(RuntimeError, match="MDX23C inference failed"):
-        await processor._harvest()
+        await processor._harvest_inference()
 
     assert processor.last_error == "boom"
-    assert processor._active == []
+    assert processor._active_packets == []
 
 
 @pytest.mark.asyncio
 async def test_harvest_rejects_sample_count_mismatch() -> None:
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
+    processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     decoded = KanyPacket.decode(packet(0).payload)
-    processor._active = [decoded]
+    processor._active_packets = [decoded]
 
     async def wrong_length() -> array:
         return array("f", [0.0, 0.0])
 
     task = asyncio.create_task(wrong_length())
     await asyncio.sleep(0)
-    processor._task = task
+    processor._inference_task = task
 
     with pytest.raises(RuntimeError, match="MDX23C returned"):
-        await processor._harvest()
+        await processor._harvest_inference()
 
-    assert processor._active == []
+    assert processor._active_packets == []
 
 
 def test_run_inference_without_adapter_raises() -> None:
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25)
+    processor = make_processor(segment_seconds=0.25)
     with pytest.raises(RuntimeError, match="MDX23C model is not loaded"):
         processor._run_inference(array("f", [0.0, 0.0]), 100, 2)
 
@@ -222,7 +288,7 @@ def test_run_inference_runs_real_torch_path(monkeypatch: pytest.MonkeyPatch) -> 
         monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1]
     )
 
-    processor = MDX23CVocalsProcessor(segment_seconds=0.25, vocal_reduction=1.0)
+    processor = make_processor(segment_seconds=0.25, vocal_reduction=1.0)
     processor._adapter = FakeAdapter()
 
     samples = array("f", [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])

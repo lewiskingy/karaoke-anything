@@ -1,14 +1,18 @@
-from array import array
 import asyncio
 import sys
 import types
+from array import array
 
 import pytest
-
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket
-from audio_trombone.processors.htdemucs import HTDemucsProcessor
+from audio_trombone.processors.htdemucs import HTDemucsConfig, HTDemucsProcessor
 from conftest import install_fake_torchaudio
+
+
+def make_processor(**kwargs) -> HTDemucsProcessor:
+    inference_fn = kwargs.pop("inference_fn", None)
+    return HTDemucsProcessor(config=HTDemucsConfig(**kwargs), inference_fn=inference_fn)
 
 
 def make_media_packet(sequence: int, samples: list[float]) -> MediaPacket:
@@ -32,7 +36,7 @@ async def collect(processor: HTDemucsProcessor, packet: MediaPacket):
 
 
 def test_vocal_reduction_is_reported_in_diagnostics() -> None:
-    processor = HTDemucsProcessor(vocal_reduction=0.5, inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(vocal_reduction=0.5, inference_fn=lambda s, _r, _c: s)
 
     diagnostics = processor.diagnostics()
 
@@ -43,7 +47,7 @@ def test_vocal_reduction_is_reported_in_diagnostics() -> None:
 @pytest.mark.parametrize("value", [-0.01, 1.01])
 def test_vocal_reduction_must_be_between_zero_and_one(value: float) -> None:
     with pytest.raises(ValueError, match="vocal_reduction"):
-        HTDemucsProcessor(vocal_reduction=value)
+        make_processor(vocal_reduction=value)
 
 
 @pytest.mark.asyncio
@@ -53,7 +57,7 @@ async def test_buffers_inference_and_releases_one_packet_per_input() -> None:
         assert channels == 2
         return array("f", [0.0] * len(samples))
 
-    processor = HTDemucsProcessor(
+    processor = make_processor(
         segment_seconds=0.004,
         inference_fn=remove_everything,
     )
@@ -82,20 +86,20 @@ async def test_buffers_inference_and_releases_one_packet_per_input() -> None:
 
 def test_segment_seconds_must_be_positive() -> None:
     with pytest.raises(ValueError, match="segment_seconds"):
-        HTDemucsProcessor(segment_seconds=0)
+        make_processor(segment_seconds=0)
 
 
 @pytest.mark.parametrize("value", [-0.01, 1.0])
 def test_overlap_must_be_between_zero_and_one(value: float) -> None:
     with pytest.raises(ValueError, match="overlap"):
-        HTDemucsProcessor(overlap=value)
+        make_processor(overlap=value)
 
 
 @pytest.mark.asyncio
 async def test_start_loads_separator_when_no_inference_fn_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    processor = HTDemucsProcessor()
+    processor = make_processor()
     calls = []
     monkeypatch.setattr(processor, "_load_separator", lambda: calls.append(True))
 
@@ -106,7 +110,7 @@ async def test_start_loads_separator_when_no_inference_fn_injected(
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_kany_payload() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     packet = MediaPacket.received(b"not-a-kany-packet", "127.0.0.1", 40_000)
 
     with pytest.raises(ValueError, match="requires KANY v1 f32 PCM packets"):
@@ -115,7 +119,7 @@ async def test_process_rejects_non_kany_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_stereo_input() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     header = bytearray(HEADER_SIZE)
     header[0:4] = b"KANY"
     header[4] = 1
@@ -134,11 +138,13 @@ async def test_process_rejects_non_stereo_input() -> None:
 
 @pytest.mark.asyncio
 async def test_flush_drains_ready_output() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     from audio_trombone.models import ProcessedPacket
 
-    processor._ready_output.append(ProcessedPacket(payload=decoded.encode_samples(decoded.samples)))
+    processor._ready_output.append(
+        ProcessedPacket(payload=decoded.encode_samples(decoded.samples))
+    )
 
     flushed = [item async for item in processor.flush()]
 
@@ -147,7 +153,7 @@ async def test_flush_drains_ready_output() -> None:
 
 
 def test_accept_stream_format_rejects_change_without_reset() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     first = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._accept_stream_format(first)
 
@@ -163,19 +169,21 @@ def test_accept_stream_format_rejects_change_without_reset() -> None:
     changed_payload = bytes(changed_header) + array("f", [0.1, 0.2, 0.3, 0.4]).tobytes()
     changed = KanyPacket.decode(changed_payload)
 
-    with pytest.raises(ValueError, match="audio format changed without processor reset"):
+    with pytest.raises(
+        ValueError, match="audio format changed without processor reset"
+    ):
         processor._accept_stream_format(changed)
 
 
 def test_target_segment_frames_requires_known_stream_format() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     with pytest.raises(RuntimeError, match="stream format is not known"):
         processor._target_segment_frames()
 
 
 @pytest.mark.asyncio
 async def test_harvest_inference_reraises_cancelled_error() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -199,7 +207,7 @@ async def test_harvest_inference_reraises_cancelled_error() -> None:
 
 @pytest.mark.asyncio
 async def test_harvest_inference_wraps_inference_failure() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -219,7 +227,7 @@ async def test_harvest_inference_wraps_inference_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_harvest_inference_rejects_sample_count_mismatch() -> None:
-    processor = HTDemucsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -264,19 +272,21 @@ def test_load_separator_raises_when_demucs_dependencies_missing(
 ) -> None:
     monkeypatch.delitem(sys.modules, "demucs", raising=False)
     monkeypatch.delitem(sys.modules, "demucs.api", raising=False)
-    processor = HTDemucsProcessor()
+    processor = make_processor()
 
     with pytest.raises(RuntimeError, match="HTDemucs dependencies are not installed"):
         processor._load_separator()
 
 
-def test_load_separator_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_separator_auto_selects_cpu_when_no_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import torch
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     instances: list = []
     _install_fake_demucs(monkeypatch, instances)
-    processor = HTDemucsProcessor(model_name="htdemucs", device="auto")
+    processor = make_processor(model_name="htdemucs", device="auto")
 
     processor._load_separator()
 
@@ -285,30 +295,34 @@ def test_load_separator_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyP
     assert instances[0].model == "htdemucs"
 
 
-def test_load_separator_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_separator_honours_explicit_cpu_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     instances: list = []
     _install_fake_demucs(monkeypatch, instances)
-    processor = HTDemucsProcessor(device="cpu")
+    processor = make_processor(device="cpu")
 
     processor._load_separator()
 
     assert processor._device == "cpu"
 
 
-def test_load_separator_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_separator_rejects_cuda_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import torch
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     instances: list = []
     _install_fake_demucs(monkeypatch, instances)
-    processor = HTDemucsProcessor(device="cuda")
+    processor = make_processor(device="cuda")
 
     with pytest.raises(RuntimeError, match="cannot see a GPU"):
         processor._load_separator()
 
 
 def test_run_inference_without_separator_raises() -> None:
-    processor = HTDemucsProcessor()
+    processor = make_processor()
     with pytest.raises(RuntimeError, match="Demucs separator is not loaded"):
         processor._run_inference(array("f", [0.0, 0.0]), 1_000, 2)
 
@@ -325,9 +339,11 @@ def test_run_inference_runs_real_torch_path_with_resample_and_padding(
             vocals = torch.zeros_like(waveform)
             return waveform, {"vocals": vocals}
 
-    install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
+    install_fake_torchaudio(
+        monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1]
+    )
 
-    processor = HTDemucsProcessor(vocal_reduction=1.0)
+    processor = make_processor(vocal_reduction=1.0)
     processor._separator = FakeSeparator()
 
     samples = array("f", [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
@@ -337,7 +353,9 @@ def test_run_inference_runs_real_torch_path_with_resample_and_padding(
     assert all(-1.0 <= value <= 1.0 for value in result)
 
 
-def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_inference_skips_resample_when_rates_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import torch
 
     class FakeSeparator:
@@ -352,7 +370,7 @@ def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.Monke
 
     install_fake_torchaudio(monkeypatch, resample=unexpected_resample)
 
-    processor = HTDemucsProcessor(vocal_reduction=1.0)
+    processor = make_processor(vocal_reduction=1.0)
     processor._separator = FakeSeparator()
 
     samples = array("f", [0.1, 0.2, 0.3, 0.4])
@@ -362,16 +380,20 @@ def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.Monke
     assert list(result) == pytest.approx(list(samples), abs=1e-6)
 
 
-def test_run_inference_raises_when_vocals_stem_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_inference_raises_when_vocals_stem_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeSeparator:
         samplerate = 1_000
 
         def separate_tensor(self, waveform, *, sr):
             return waveform, {}
 
-    install_fake_torchaudio(monkeypatch, resample=lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
+    install_fake_torchaudio(
+        monkeypatch, resample=lambda *a, **k: (_ for _ in ()).throw(AssertionError())
+    )
 
-    processor = HTDemucsProcessor()
+    processor = make_processor()
     processor._separator = FakeSeparator()
 
     with pytest.raises(RuntimeError, match="did not return a vocals stem"):

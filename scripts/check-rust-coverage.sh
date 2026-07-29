@@ -10,4 +10,8 @@ if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
 fi
 
 cd "$(dirname "$0")/../client"
-cargo llvm-cov --ignore-filename-regex "main\.rs$" --fail-under-lines 100
+# main.rs and device.rs are thin cpal/OS I/O glue -- talking to a real audio
+# Host/Device, which can't be constructed in tests. The decision logic they
+# call into is pulled out into device_selection.rs (and network.rs's
+# AudioSocket-abstracted loops), which stay under the 100% requirement below.
+cargo llvm-cov --ignore-filename-regex "main\.rs$|device\.rs$" --fail-under-lines 100

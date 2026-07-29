@@ -2,18 +2,12 @@ import runpy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
-
+from audio_trombone.mdx23c_model_yaml import YamlConfig, _wrap, load_config
 from audio_trombone.tools import validate_mdx23c
-from audio_trombone.tools.validate_mdx23c import (
-    Config,
-    _config,
-    load_config,
-    main,
-    normalise_state_dict,
-    validate,
-)
+from audio_trombone.tools.validate_mdx23c import main, normalise_state_dict, validate
 
 
 def test_accepts_raw_state_dict():
@@ -54,19 +48,19 @@ def test_rejects_non_string_keys():
 
 
 def test_config_getattr_returns_present_key():
-    config = Config({"training": {"instruments": ["vocals"]}})
+    config = YamlConfig({"training": {"instruments": ["vocals"]}})
     assert config["training"] == {"instruments": ["vocals"]}
     assert config.training == {"instruments": ["vocals"]}
 
 
 def test_config_getattr_raises_attribute_error_for_missing_key():
-    config = Config({})
+    config = YamlConfig({})
     with pytest.raises(AttributeError, match="missing"):
-        config.missing
+        config.missing  # noqa: B018 -- the attribute access is the thing under test
 
 
 def test_config_recursively_wraps_nested_mappings_and_lists():
-    wrapped = _config(
+    wrapped = _wrap(
         {
             "training": {"instruments": ["vocals", "instrumental"]},
             "layers": [{"kind": "conv"}, {"kind": "norm"}],
@@ -74,11 +68,11 @@ def test_config_recursively_wraps_nested_mappings_and_lists():
         }
     )
 
-    assert isinstance(wrapped, Config)
-    assert isinstance(wrapped.training, Config)
+    assert isinstance(wrapped, YamlConfig)
+    assert isinstance(wrapped.training, YamlConfig)
     assert wrapped.training.instruments == ["vocals", "instrumental"]
     assert isinstance(wrapped.layers, list)
-    assert all(isinstance(layer, Config) for layer in wrapped.layers)
+    assert all(isinstance(layer, YamlConfig) for layer in wrapped.layers)
     assert wrapped.layers[0].kind == "conv"
     assert wrapped.sample_rate == 44_100
 
@@ -92,7 +86,7 @@ def test_load_config_parses_yaml_mapping(tmp_path: Path):
 
     config = load_config(config_path)
 
-    assert isinstance(config, Config)
+    assert isinstance(config, YamlConfig)
     assert config.training.instruments == ["vocals", "instrumental"]
     assert config.audio.sample_rate == 44_100
 
@@ -106,7 +100,7 @@ def test_load_config_rejects_non_mapping_document(tmp_path: Path):
 
 
 class _FakeModel:
-    instances: list["_FakeModel"] = []
+    instances: ClassVar[list["_FakeModel"]] = []
 
     def __init__(self, config) -> None:
         self.config = config

@@ -12,7 +12,7 @@ def receive(port: int) -> None:
     while True:
         try:
             data, addr = sock.recvfrom(65535)
-        except socket.timeout:
+        except TimeoutError:
             print("No packet received for 5 seconds")
             continue
         print(f"From {addr}: {data!r}")

@@ -2,7 +2,6 @@ import asyncio
 import time
 
 import pytest
-
 from audio_trombone.config import Settings
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities
@@ -10,13 +9,13 @@ from audio_trombone.service import TromboneService
 
 
 def make_service(**overrides) -> TromboneService:
-    defaults = dict(
-        listen_host="127.0.0.1",
-        input_port=0,
-        output_port=59_999,
-        input_queue_size=8,
-        processor="passthrough",
-    )
+    defaults = {
+        "listen_host": "127.0.0.1",
+        "input_port": 0,
+        "output_port": 59_999,
+        "input_queue_size": 8,
+        "processor": "passthrough",
+    }
     defaults.update(overrides)
     return TromboneService(Settings(**defaults))
 
@@ -45,6 +44,8 @@ class BufferedFakeProcessor(AudioProcessor):
         self._outputs = outputs
 
     async def process(self, packet: MediaPacket):
+        # `yield` in an unreachable branch makes this an async generator
+        # that produces nothing; this processor only emits via flush().
         if False:
             yield ProcessedPacket(payload=b"")
 
@@ -77,7 +78,9 @@ class SlowProcessor(AudioProcessor):
         yield ProcessedPacket(payload=packet.payload)  # pragma: no cover
 
 
-def make_packet(payload: bytes = b"abcd", host: str = "127.0.0.1", port: int = 4000) -> MediaPacket:
+def make_packet(
+    payload: bytes = b"abcd", host: str = "127.0.0.1", port: int = 4000
+) -> MediaPacket:
     return MediaPacket.received(payload=payload, sender_host=host, sender_port=port)
 
 
@@ -181,9 +184,18 @@ def test_runtime_settings_returns_nested_structure() -> None:
 
     assert settings_dict["processor"] == service.settings.processor
     assert settings_dict["demucs"]["model"] == service.settings.demucs_model
-    assert settings_dict["convtasnet"]["model_path"] == service.settings.convtasnet_model_path
-    assert settings_dict["centre_reduction"]["reduction"] == service.settings.centre_reduction
-    assert settings_dict["startup_defaults"]["processor"] == service.startup_settings.processor
+    assert (
+        settings_dict["convtasnet"]["model_path"]
+        == service.settings.convtasnet_model_path
+    )
+    assert (
+        settings_dict["centre_reduction"]["reduction"]
+        == service.settings.centre_reduction
+    )
+    assert (
+        settings_dict["startup_defaults"]["processor"]
+        == service.startup_settings.processor
+    )
     assert (
         settings_dict["startup_defaults"]["convtasnet"]["model_path"]
         == service.startup_settings.convtasnet_model_path
@@ -220,7 +232,9 @@ async def test_update_runtime_settings_applies_live_demucs_vocal_reduction() -> 
 
 
 @pytest.mark.asyncio
-async def test_update_runtime_settings_applies_live_convtasnet_vocal_reduction() -> None:
+async def test_update_runtime_settings_applies_live_convtasnet_vocal_reduction() -> (
+    None
+):
     service = make_service(processor="convtasnet-lyrics-causal")
 
     result = await service.update_runtime_settings({"convtasnet_vocal_reduction": 0.4})
@@ -242,7 +256,9 @@ async def test_update_runtime_settings_applies_live_mdx23c_vocal_reduction() -> 
 
 
 @pytest.mark.asyncio
-async def test_update_runtime_settings_restarts_processor_when_not_live_applicable() -> None:
+async def test_update_runtime_settings_restarts_processor_when_not_live_applicable() -> (
+    None
+):
     service = make_service(processor="passthrough")
 
     result = await service.update_runtime_settings({"processor": "null"})
@@ -265,9 +281,15 @@ async def test_update_runtime_settings_restarts_processor_when_not_live_applicab
         ({"convtasnet_segment_seconds": -1}, "ConvTasNet segment_seconds"),
         ({"convtasnet_vocal_reduction": -0.1}, "ConvTasNet vocal_reduction"),
         ({"convtasnet_vocal_source_index": -1}, "ConvTasNet vocal_source_index"),
-        ({"convtasnet_accompaniment_source_index": -1}, "ConvTasNet accompaniment_source_index"),
         (
-            {"convtasnet_vocal_source_index": 1, "convtasnet_accompaniment_source_index": 1},
+            {"convtasnet_accompaniment_source_index": -1},
+            "ConvTasNet accompaniment_source_index",
+        ),
+        (
+            {
+                "convtasnet_vocal_source_index": 1,
+                "convtasnet_accompaniment_source_index": 1,
+            },
             "must differ",
         ),
         ({"centre_reduction": 2.0}, "centre_reduction"),
@@ -327,7 +349,9 @@ def test_can_apply_live_false_for_mismatched_processor() -> None:
 
 def test_can_apply_live_false_for_multiple_keys() -> None:
     service = make_service(processor="stereo-centre-reduction")
-    assert service._can_apply_live({"centre_reduction": 0.3, "processor": "null"}) is False
+    assert (
+        service._can_apply_live({"centre_reduction": 0.3, "processor": "null"}) is False
+    )
 
 
 # --- _send_output --------------------------------------------------------------
@@ -336,9 +360,11 @@ def test_can_apply_live_false_for_multiple_keys() -> None:
 def test_send_output_uses_output_destination_when_provided() -> None:
     service = make_service(return_host="10.0.0.1", output_port=6000)
     service.transport = RecordingTransport()
-    processed = ProcessedPacket(payload=b"y", destination_host="1.2.3.4", destination_port=7000)
+    processed = ProcessedPacket(
+        payload=b"y", destination_host="1.2.3.4", destination_port=7000
+    )
 
-    service._send_output(make_packet(host="192.168.1.5"), processed)
+    service._send_output(processed, fallback_host="192.168.1.5")
 
     assert service.transport.sent == [(b"y", ("1.2.3.4", 7000))]
     assert service.metrics.packets_forwarded == 1
@@ -350,7 +376,7 @@ def test_send_output_falls_back_to_return_host_and_output_port() -> None:
     service.transport = RecordingTransport()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(host="192.168.1.5"), processed)
+    service._send_output(processed, fallback_host="192.168.1.5")
 
     assert service.transport.sent == [(b"y", ("10.0.0.1", 6000))]
 
@@ -360,7 +386,7 @@ def test_send_output_falls_back_to_sender_host_when_no_return_host() -> None:
     service.transport = RecordingTransport()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(host="192.168.1.5"), processed)
+    service._send_output(processed, fallback_host="192.168.1.5")
 
     assert service.transport.sent == [(b"y", ("192.168.1.5", 6000))]
 
@@ -369,7 +395,7 @@ def test_send_output_records_error_when_transport_missing() -> None:
     service = make_service()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(), processed)
+    service._send_output(processed, fallback_host="127.0.0.1")
 
     assert service.metrics.forwarding_errors == 1
 
@@ -379,7 +405,7 @@ def test_send_output_records_error_when_sendto_raises() -> None:
     service.transport = BrokenTransport()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(), processed)
+    service._send_output(processed, fallback_host="127.0.0.1")
 
     assert service.metrics.forwarding_errors == 1
 
@@ -416,7 +442,10 @@ async def test_flush_processor_sends_output_when_destination_known() -> None:
 
 def test_health_reports_starting_before_start() -> None:
     service = make_service()
-    assert service.health() == {"status": "starting", "processor": service.processor.name}
+    assert service.health() == {
+        "status": "starting",
+        "processor": service.processor.name,
+    }
 
 
 @pytest.mark.asyncio
@@ -468,7 +497,9 @@ def test_prometheus_metrics_reports_age_when_packet_seen() -> None:
     output = service.prometheus_metrics()
 
     line = next(
-        line for line in output.splitlines() if line.startswith("karaoke_anything_last_packet_age_seconds")
+        line
+        for line in output.splitlines()
+        if line.startswith("karaoke_anything_last_packet_age_seconds")
     )
     value = float(line.split()[1])
     assert value >= 4.9

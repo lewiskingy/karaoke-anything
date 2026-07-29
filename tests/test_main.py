@@ -1,7 +1,7 @@
-from dataclasses import dataclass
 import importlib
 import runpy
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -145,7 +145,9 @@ def test_patch_runtime_settings_applies_live_centre_reduction(load_main) -> None
         ),
     ],
 )
-def test_patch_runtime_settings_changes_model_fields(load_main, case: ModelFieldsCase) -> None:
+def test_patch_runtime_settings_changes_model_fields(
+    load_main, case: ModelFieldsCase
+) -> None:
     main_module = load_main()
     with TestClient(main_module.app) as client:
         response = client.patch("/api/settings", json={case.key: case.payload})
@@ -243,11 +245,13 @@ def test_flatten_updates_only_includes_changed_fields(load_main) -> None:
     payload = main_module.RuntimeSettingsUpdate(
         processor="passthrough",
         demucs=main_module.DemucsSettingsUpdate(model=None, vocal_reduction=1.0),
-        convtasnet=main_module.ConvTasNetSettingsUpdate(model_path=None, vocal_reduction=1.0),
+        convtasnet=main_module.ConvTasNetSettingsUpdate(
+            model_path=None, vocal_reduction=1.0
+        ),
         centre_reduction=main_module.CentreReductionSettingsUpdate(reduction=0.7),
     )
 
-    updates = main_module._flatten_updates(payload)
+    updates = main_module._flatten_updates(payload, main_module.service.settings)
 
     assert updates == {}
 
@@ -261,7 +265,7 @@ def test_flatten_updates_reports_changed_fields(load_main) -> None:
         centre_reduction=main_module.CentreReductionSettingsUpdate(reduction=0.2),
     )
 
-    updates = main_module._flatten_updates(payload)
+    updates = main_module._flatten_updates(payload, main_module.service.settings)
 
     assert updates == {
         "processor": "null",

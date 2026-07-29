@@ -1,12 +1,13 @@
 from array import array
 
 import pytest
-
 from audio_trombone import kany
 from audio_trombone.kany import HEADER_SIZE, KanyPacket, KanyProtocolError
 
 
-def make_payload(samples: array, *, channels: int = 2, sample_rate: int = 48_000) -> bytes:
+def make_payload(
+    samples: array, *, channels: int = 2, sample_rate: int = 48_000
+) -> bytes:
     frames = len(samples) // channels
     header = bytearray(HEADER_SIZE)
     header[0:4] = b"KANY"
@@ -107,7 +108,9 @@ def test_encode_samples_rejects_sample_count_mismatch() -> None:
         packet.encode_samples(array("f", [0.0, 0.25]))
 
 
-def test_encode_samples_byteswaps_on_big_endian_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_encode_samples_byteswaps_on_big_endian_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     packet = KanyPacket.decode(make_payload(array("f", [0.0, 0.25, -0.5, 1.0])))
     replacement = array("f", [0.0, 0.25, -0.5, 1.0])
     expected = array("f", replacement)

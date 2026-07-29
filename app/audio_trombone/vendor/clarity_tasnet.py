@@ -18,9 +18,9 @@
 import math
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from huggingface_hub import PyTorchModelHubMixin
+from torch import nn
 
 EPS = 1e-8
 
@@ -62,7 +62,14 @@ class ConvTasNetStereo(nn.Module, PyTorchModelHubMixin):
     ):
         super().__init__()
         self.N, self.L, self.B, self.H, self.P, self.X, self.R, self.C = (
-            N, L, B, H, P, X, R, C
+            N,
+            L,
+            B,
+            H,
+            P,
+            X,
+            R,
+            C,
         )
         self.norm_type = norm_type
         self.causal = causal
@@ -123,8 +130,7 @@ class Decoder(nn.Module):
 
 class TemporalConvNet(nn.Module):
     def __init__(
-        self, N, B, H, P, X, R, C, norm_type="gLN", causal=False,
-        mask_nonlinear="relu"
+        self, N, B, H, P, X, R, C, norm_type="gLN", causal=False, mask_nonlinear="relu"
     ):
         super().__init__()
         self.C = C
@@ -133,12 +139,18 @@ class TemporalConvNet(nn.Module):
         for _ in range(R):
             blocks = []
             for x in range(X):
-                dilation = 2 ** x
+                dilation = 2**x
                 padding = (P - 1) * dilation if causal else (P - 1) * dilation // 2
                 blocks.append(
                     TemporalBlock(
-                        B, H, P, stride=1, padding=padding, dilation=dilation,
-                        norm_type=norm_type, causal=causal
+                        B,
+                        H,
+                        P,
+                        stride=1,
+                        padding=padding,
+                        dilation=dilation,
+                        norm_type=norm_type,
+                        causal=causal,
                     )
                 )
             repeats.append(nn.Sequential(*blocks))
@@ -161,8 +173,15 @@ class TemporalConvNet(nn.Module):
 
 class TemporalBlock(nn.Module):
     def __init__(
-        self, in_channels, out_channels, kernel_size, stride, padding, dilation,
-        norm_type="gLN", causal=False
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        norm_type="gLN",
+        causal=False,
     ):
         super().__init__()
         self.net = nn.Sequential(
@@ -170,8 +189,14 @@ class TemporalBlock(nn.Module):
             nn.PReLU(),
             chose_norm(norm_type, out_channels),
             DepthwiseSeparableConv(
-                out_channels, in_channels, kernel_size, stride, padding,
-                dilation, norm_type, causal
+                out_channels,
+                in_channels,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                norm_type,
+                causal,
             ),
         )
 
@@ -181,24 +206,38 @@ class TemporalBlock(nn.Module):
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(
-        self, in_channels, out_channels, kernel_size, stride, padding, dilation,
-        norm_type="gLN", causal=False
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        norm_type="gLN",
+        causal=False,
     ):
         super().__init__()
         layers = [
             nn.Conv1d(
-                in_channels, in_channels, kernel_size, stride=stride,
-                padding=padding, dilation=dilation, groups=in_channels,
-                bias=False
+                in_channels,
+                in_channels,
+                kernel_size,
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                groups=in_channels,
+                bias=False,
             )
         ]
         if causal:
             layers.append(Chomp1d(padding))
-        layers.extend([
-            nn.PReLU(),
-            chose_norm(norm_type, in_channels),
-            nn.Conv1d(in_channels, out_channels, 1, bias=False),
-        ])
+        layers.extend(
+            [
+                nn.PReLU(),
+                chose_norm(norm_type, in_channels),
+                nn.Conv1d(in_channels, out_channels, 1, bias=False),
+            ]
+        )
         self.net = nn.Sequential(*layers)
 
     def forward(self, value):
@@ -213,7 +252,7 @@ class Chomp1d(nn.Module):
     def forward(self, value):
         if self.chomp_size == 0:
             return value
-        return value[:, :, :-self.chomp_size].contiguous()
+        return value[:, :, : -self.chomp_size].contiguous()
 
 
 def chose_norm(norm_type, channel_size):
@@ -246,7 +285,7 @@ class GlobalLayerNorm(nn.Module):
 
     def forward(self, value):
         mean = value.mean(dim=1, keepdim=True).mean(dim=2, keepdim=True)
-        variance = ((value - mean) ** 2).mean(dim=1, keepdim=True).mean(
-            dim=2, keepdim=True
+        variance = (
+            ((value - mean) ** 2).mean(dim=1, keepdim=True).mean(dim=2, keepdim=True)
         )
         return self.gamma * (value - mean) / torch.pow(variance + EPS, 0.5) + self.beta

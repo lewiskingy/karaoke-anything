@@ -3,15 +3,18 @@ import time
 from types import SimpleNamespace
 
 import pytest
-
 from audio_trombone.models import Metrics
 from audio_trombone.transport import UdpIngressProtocol
 
 
-def make_protocol(queue_size: int = 10, max_packet_size: int = 65535) -> UdpIngressProtocol:
+def make_protocol(
+    queue_size: int = 10, max_packet_size: int = 65535
+) -> UdpIngressProtocol:
     queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
     metrics = Metrics(started_at=time.time())
-    return UdpIngressProtocol(queue=queue, metrics=metrics, max_packet_size=max_packet_size)
+    return UdpIngressProtocol(
+        queue=queue, metrics=metrics, max_packet_size=max_packet_size
+    )
 
 
 @pytest.mark.asyncio

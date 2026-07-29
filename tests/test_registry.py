@@ -1,5 +1,4 @@
 import pytest
-
 from audio_trombone.config import Settings
 from audio_trombone.processors.registry import ProcessorRegistry
 
@@ -62,4 +61,6 @@ def test_registry_describe_lists_all_processors_sorted_with_capabilities() -> No
 
 
 def test_registry_describes_mdx23c() -> None:
-    assert "mdx23c-vocals" in {item["name"] for item in ProcessorRegistry().describe()["processors"]}
+    assert "mdx23c-vocals" in {
+        item["name"] for item in ProcessorRegistry().describe()["processors"]
+    }

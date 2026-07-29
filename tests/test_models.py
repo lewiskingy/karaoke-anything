@@ -5,7 +5,9 @@ from audio_trombone.models import MediaPacket, Metrics, ProcessedPacket
 
 def test_media_packet_received_stamps_current_time() -> None:
     before = time.time()
-    packet = MediaPacket.received(payload=b"abc", sender_host="127.0.0.1", sender_port=1234)
+    packet = MediaPacket.received(
+        payload=b"abc", sender_host="127.0.0.1", sender_port=1234
+    )
     after = time.time()
 
     assert packet.payload == b"abc"

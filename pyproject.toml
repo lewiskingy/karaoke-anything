@@ -2,3 +2,22 @@
 asyncio_mode = "auto"
 pythonpath = ["app"]
 addopts = "--cov=app --cov-report=term-missing --cov-fail-under=100"
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.mypy]
+mypy_path = "app"
+files = ["app"]
+
+[[tool.mypy.overrides]]
+# torchaudio/demucs ship no type stubs. mdx23c_tfc_tdf_v3 is fetched from an
+# upstream GitHub repo at Docker build time (Dockerfile.demucs); it's never
+# present in this repo, so mypy can't see it either way.
+module = [
+    "torchaudio",
+    "torchaudio.*",
+    "demucs.*",
+    "audio_trombone.vendor.mdx23c_tfc_tdf_v3",
+]
+ignore_missing_imports = true

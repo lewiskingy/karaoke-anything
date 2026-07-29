@@ -1,6 +1,74 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
   - repo: local
     hooks:
+      - id: ruff-format
+        name: ruff format (Python)
+        entry: ruff format --check
+        language: system
+        types: [python]
+      - id: ruff-check
+        name: ruff check (Python lint)
+        entry: ruff check
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy (Python type checking)
+        entry: mypy
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: cargo-fmt
+        name: cargo fmt (Rust)
+        entry: cargo fmt --manifest-path client/Cargo.toml --check
+        language: system
+        pass_filenames: false
+        files: ^client/
+      - id: cargo-clippy
+        name: cargo clippy (Rust lint, warnings denied)
+        entry: cargo clippy --manifest-path client/Cargo.toml --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        files: ^client/
+      - id: cargo-audit
+        name: cargo audit (Rust dependency vulnerabilities)
+        entry: cargo audit --file client/Cargo.lock
+        language: system
+        pass_filenames: false
+        files: ^client/Cargo\.(toml|lock)$
+      # Remaining starlette findings not reachable via this app's actual code:
+      # PYSEC-2026-161/248: Host/path -> request.url confusion; nothing here
+      #   makes security decisions based on request.url or request.url.path.
+      # PYSEC-2026-249: unbounded application/x-www-form-urlencoded parsing;
+      #   the settings API only accepts JSON bodies (Pydantic models).
+      # PYSEC-2026-2281: Windows UNC-path SSRF in StaticFiles; unused here,
+      #   and the service doesn't run on Windows.
+      # PYSEC-2026-2280: HTTPEndpoint subclass method dispatch; unused here
+      #   (routes are plain FastAPI function handlers).
+      # Fixing these needs starlette>=1.0.1, which needs a FastAPI version
+      # newer than any currently published (fastapi caps starlette<0.51.0
+      # as of writing). Revisit when that changes.
+      - id: pip-audit
+        name: pip-audit (Python dependency vulnerabilities)
+        entry: >-
+          pip-audit -r requirements-dev.txt
+          --ignore-vuln PYSEC-2026-161
+          --ignore-vuln PYSEC-2026-248
+          --ignore-vuln PYSEC-2026-249
+          --ignore-vuln PYSEC-2026-2281
+          --ignore-vuln PYSEC-2026-2280
+        language: system
+        pass_filenames: false
+        files: ^requirements.*\.txt$
       - id: pytest-coverage
         name: pytest (100% coverage required)
         entry: pytest

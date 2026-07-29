@@ -1,5 +1,5 @@
 from array import array
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from audio_trombone.kany import KanyPacket, KanyProtocolError
 from audio_trombone.models import MediaPacket, ProcessedPacket

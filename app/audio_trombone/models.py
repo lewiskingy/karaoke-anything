@@ -1,5 +1,5 @@
-from dataclasses import asdict, dataclass
 import time
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
@@ -35,12 +35,12 @@ class ProcessedPacket:
 class Metrics:
     started_at: float
 
-    packets_received: int = 0
-    packets_enqueued: int = 0
-    packets_dropped: int = 0
-    packets_processed: int = 0
-    packets_emitted: int = 0
-    packets_forwarded: int = 0
+    packets_received: int = 0  # UDP datagrams accepted by the ingress socket
+    packets_enqueued: int = 0  # of those, successfully placed on the input queue
+    packets_dropped: int = 0  # oversized, or the input queue was full
+    packets_processed: int = 0  # input packets the processor finished handling
+    packets_emitted: int = 0  # outputs the processor produced (process() + flush())
+    packets_forwarded: int = 0  # of those, successfully sent back out over UDP
 
     bytes_received: int = 0
     bytes_forwarded: int = 0
