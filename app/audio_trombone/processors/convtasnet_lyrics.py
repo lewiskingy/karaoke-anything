@@ -44,7 +44,7 @@ class ConvTasNetLyricsProcessor(SegmentedInferenceProcessor):
     reduced independently as real-time performance is measured.
     """
 
-    _log_name = "ConvTasNet"
+    _model_label = "ConvTasNet"
     name = "convtasnet-lyrics-causal"
     description = (
         "Experimental causal Conv-TasNet lyric reduction using the Cadenza "

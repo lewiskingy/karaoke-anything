@@ -134,7 +134,7 @@ async def test_process_resets_and_raises_on_format_change() -> None:
     with pytest.raises(ValueError, match="audio format changed"):
         await collect(processor, packet(1, sample_rate=200))
 
-    assert processor._rate is None
+    assert processor._stream_sample_rate is None
 
 
 @pytest.mark.asyncio
@@ -160,7 +160,7 @@ async def test_drops_oldest_packets_when_input_buffer_overflows() -> None:
 async def test_flush_drains_ready_output() -> None:
     processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     decoded = KanyPacket.decode(packet(0).payload)
-    processor._ready.append(ProcessedPacket(payload=decoded.encode_samples(decoded.samples)))
+    processor._ready_output.append(ProcessedPacket(payload=decoded.encode_samples(decoded.samples)))
 
     flushed = [output async for output in processor.flush()]
 
@@ -171,39 +171,39 @@ async def test_flush_drains_ready_output() -> None:
 async def test_harvest_wraps_inference_failure() -> None:
     processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     decoded = KanyPacket.decode(packet(0).payload)
-    processor._active = [decoded]
+    processor._active_packets = [decoded]
 
     async def boom() -> array:
         raise ValueError("boom")
 
     task = asyncio.create_task(boom())
     await asyncio.sleep(0)
-    processor._task = task
+    processor._inference_task = task
 
     with pytest.raises(RuntimeError, match="MDX23C inference failed"):
-        await processor._harvest()
+        await processor._harvest_inference()
 
     assert processor.last_error == "boom"
-    assert processor._active == []
+    assert processor._active_packets == []
 
 
 @pytest.mark.asyncio
 async def test_harvest_rejects_sample_count_mismatch() -> None:
     processor = make_processor(segment_seconds=0.25, inference_fn=lambda s, r, c: s)
     decoded = KanyPacket.decode(packet(0).payload)
-    processor._active = [decoded]
+    processor._active_packets = [decoded]
 
     async def wrong_length() -> array:
         return array("f", [0.0, 0.0])
 
     task = asyncio.create_task(wrong_length())
     await asyncio.sleep(0)
-    processor._task = task
+    processor._inference_task = task
 
     with pytest.raises(RuntimeError, match="MDX23C returned"):
-        await processor._harvest()
+        await processor._harvest_inference()
 
-    assert processor._active == []
+    assert processor._active_packets == []
 
 
 def test_run_inference_without_adapter_raises() -> None:

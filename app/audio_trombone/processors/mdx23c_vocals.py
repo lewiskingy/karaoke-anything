@@ -8,13 +8,14 @@ from dataclasses import dataclass
 import time
 from typing import Any, AsyncIterator, get_args
 
-from audio_trombone.kany import KanyPacket, KanyProtocolError
+from audio_trombone.kany import HEADER_SIZE, KanyPacket, KanyProtocolError
 from audio_trombone.mdx23c import MDX23CPrecision
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities
 
 InferenceFunction = Callable[[array, int, int], array]
 SUPPORTED_SEGMENTS = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0)
+BYTES_PER_SAMPLE = 4  # sizeof(float32); KANY packets are f32 PCM
 
 
 def _raise_first_failure(checks: tuple[tuple[bool, str], ...]) -> None:
@@ -45,7 +46,12 @@ class MDX23CVocalsConfig:
                 self.segment_seconds in SUPPORTED_SEGMENTS,
                 f"segment_seconds must be one of {SUPPORTED_SEGMENTS}",
             ),
-            (0 <= self.overlap < 0.5, "overlap must be between 0.0 and less than 0.5"),
+            (
+                # `_crossfade` only ever blends up to half a segment
+                # (`frames // 2`), so overlap can't reach 0.5.
+                0 <= self.overlap < 0.5,
+                "overlap must be between 0.0 and less than 0.5",
+            ),
             (self.batch_size == 1, "batch_size must be 1 for paced interactive processing"),
             (0 <= self.vocal_reduction <= 1, "vocal_reduction must be between 0.0 and 1.0"),
             (
@@ -89,13 +95,13 @@ class MDX23CVocalsProcessor(AudioProcessor):
         self._inference_fn = inference_fn
         self._adapter: Any | None = None
 
-        self._input: deque[KanyPacket] = deque()
+        self._input_packets: deque[KanyPacket] = deque()
         self._input_frames = 0
-        self._ready: deque[ProcessedPacket] = deque()
-        self._task: asyncio.Task[array] | None = None
-        self._active: list[KanyPacket] = []
-        self._rate: int | None = None
-        self._channels: int | None = None
+        self._ready_output: deque[ProcessedPacket] = deque()
+        self._inference_task: asyncio.Task[array] | None = None
+        self._active_packets: list[KanyPacket] = []
+        self._stream_sample_rate: int | None = None
+        self._stream_channels: int | None = None
         self._previous_tail: array | None = None
 
         self.segments_started = 0
@@ -136,24 +142,24 @@ class MDX23CVocalsProcessor(AudioProcessor):
         self.model_loaded = False
 
     async def reset(self) -> None:
-        if self._task:
-            self._task.cancel()
+        if self._inference_task:
+            self._inference_task.cancel()
             try:
-                await self._task
+                await self._inference_task
             except (asyncio.CancelledError, Exception):
                 pass
-        self._task = None
-        self._active.clear()
-        self._input.clear()
-        self._ready.clear()
+        self._inference_task = None
+        self._active_packets.clear()
+        self._input_packets.clear()
+        self._ready_output.clear()
         self._input_frames = 0
-        self._rate = None
-        self._channels = None
+        self._stream_sample_rate = None
+        self._stream_channels = None
         self._previous_tail = None
         self.last_error = None
 
     @staticmethod
-    def _decode_stereo_packet(payload: bytes) -> KanyPacket:
+    def _decode_and_validate(payload: bytes) -> KanyPacket:
         try:
             decoded = KanyPacket.decode(payload)
         except KanyProtocolError as exc:
@@ -163,50 +169,56 @@ class MDX23CVocalsProcessor(AudioProcessor):
         return decoded
 
     async def _track_stream_format(self, decoded: KanyPacket) -> None:
-        if self._rate is None:
-            self._rate, self._channels = decoded.sample_rate, decoded.channels
+        if self._stream_sample_rate is None:
+            self._stream_sample_rate, self._stream_channels = (
+                decoded.sample_rate,
+                decoded.channels,
+            )
             return
-        if (decoded.sample_rate, decoded.channels) != (self._rate, self._channels):
+        if (decoded.sample_rate, decoded.channels) != (
+            self._stream_sample_rate,
+            self._stream_channels,
+        ):
             await self.reset()
             raise ValueError("audio format changed; MDX23C state was reset")
 
     def _buffer_packet(self, decoded: KanyPacket) -> None:
-        self._input.append(decoded)
+        self._input_packets.append(decoded)
         self._input_frames += decoded.frames
         maximum = round(decoded.sample_rate * self.segment_seconds * self.max_buffered_segments)
-        while self._input_frames > maximum and self._input:
-            dropped = self._input.popleft()
+        while self._input_frames > maximum and self._input_packets:
+            dropped = self._input_packets.popleft()
             self._input_frames -= dropped.frames
             self.dropped_packets += 1
 
     async def process(self, packet: MediaPacket) -> AsyncIterator[ProcessedPacket]:
-        await self._harvest()
-        decoded = self._decode_stereo_packet(packet.payload)
+        await self._harvest_inference()
+        decoded = self._decode_and_validate(packet.payload)
         await self._track_stream_format(decoded)
         self._buffer_packet(decoded)
 
-        if self._task is None and self._input_frames >= self._target_frames():
-            self._launch()
+        if self._inference_task is None and self._input_frames >= self._target_segment_frames():
+            self._launch_segment()
 
-        if self._ready:
-            yield self._ready.popleft()
-        elif self._task is not None:
+        if self._ready_output:
+            yield self._ready_output.popleft()
+        elif self._inference_task is not None:
             self.underruns += 1
 
     async def flush(self) -> AsyncIterator[ProcessedPacket]:
-        await self._harvest()
-        while self._ready:
-            yield self._ready.popleft()
+        await self._harvest_inference()
+        while self._ready_output:
+            yield self._ready_output.popleft()
 
-    def _target_frames(self) -> int:
-        assert self._rate is not None
-        return round(self._rate * self.segment_seconds)
+    def _target_segment_frames(self) -> int:
+        assert self._stream_sample_rate is not None
+        return round(self._stream_sample_rate * self.segment_seconds)
 
-    def _launch(self) -> None:
+    def _launch_segment(self) -> None:
         packets: list[KanyPacket] = []
         frames = 0
-        while self._input and frames < self._target_frames():
-            item = self._input.popleft()
+        while self._input_packets and frames < self._target_segment_frames():
+            item = self._input_packets.popleft()
             packets.append(item)
             frames += item.frames
             self._input_frames -= item.frames
@@ -215,7 +227,7 @@ class MDX23CVocalsProcessor(AudioProcessor):
         for item in packets:
             samples.extend(item.samples)
 
-        self._active = packets
+        self._active_packets = packets
         self.segments_started += 1
         started = time.perf_counter()
 
@@ -226,12 +238,14 @@ class MDX23CVocalsProcessor(AudioProcessor):
             self.last_real_time_factor = elapsed / (frames / packets[0].sample_rate)
             return result
 
-        self._task = asyncio.create_task(run(), name=f"mdx23c-segment-{self.segments_started}")
+        self._inference_task = asyncio.create_task(
+            run(), name=f"mdx23c-segment-{self.segments_started}"
+        )
 
-    async def _harvest(self) -> None:
-        if self._task is None or not self._task.done():
+    async def _harvest_inference(self) -> None:
+        if self._inference_task is None or not self._inference_task.done():
             return
-        task, self._task = self._task, None
+        task, self._inference_task = self._inference_task, None
 
         output = await self._await_segment_result(task)
         self._distribute_segment_output(output)
@@ -241,27 +255,27 @@ class MDX23CVocalsProcessor(AudioProcessor):
         try:
             return await task
         except Exception as exc:
-            self._active.clear()
+            self._active_packets.clear()
             self.last_error = str(exc)
             raise RuntimeError(f"MDX23C inference failed: {exc}") from exc
 
     def _distribute_segment_output(self, output: array) -> None:
-        expected = sum(p.frames * 2 for p in self._active)
+        expected = sum(p.frames * 2 for p in self._active_packets)
         if len(output) != expected:
-            self._active.clear()
+            self._active_packets.clear()
             raise RuntimeError(f"MDX23C returned {len(output)} samples; expected {expected}")
 
         self._crossfade(output)
         offset = 0
-        for original in self._active:
+        for original in self._active_packets:
             count = original.frames * 2
-            self._ready.append(
+            self._ready_output.append(
                 ProcessedPacket(payload=original.encode_samples(array("f", output[offset : offset + count])))
             )
             offset += count
 
     def _finish_segment(self) -> None:
-        self._active.clear()
+        self._active_packets.clear()
         self.segments_completed += 1
         self.last_error = None
 
@@ -304,7 +318,7 @@ class MDX23CVocalsProcessor(AudioProcessor):
         return array("f", result.t().contiguous().cpu().view(-1).tolist())
 
     def diagnostics(self) -> dict[str, object]:
-        rate = self._rate or 0
+        rate = self._stream_sample_rate or 0
         return {
             "device": self.device,
             "precision": self.precision,
@@ -316,12 +330,17 @@ class MDX23CVocalsProcessor(AudioProcessor):
             "effective_input_buffering_seconds": self.segment_seconds,
             "estimated_algorithmic_latency_seconds": self.segment_seconds,
             "queued_input_seconds": self._input_frames / rate if rate else 0.0,
-            "queued_output_seconds": sum(len(p.payload) - 28 for p in self._ready) / (rate * 2 * 4) if rate else 0.0,
-            "buffered_input_packets": len(self._input),
-            "ready_output_packets": len(self._ready),
+            "queued_output_seconds": (
+                sum(len(p.payload) - HEADER_SIZE for p in self._ready_output)
+                / (rate * (self._stream_channels or 2) * BYTES_PER_SAMPLE)
+                if rate
+                else 0.0
+            ),
+            "buffered_input_packets": len(self._input_packets),
+            "ready_output_packets": len(self._ready_output),
             "dropped_packets": self.dropped_packets,
             "underruns": self.underruns,
-            "inference_running": self._task is not None,
+            "inference_running": self._inference_task is not None,
             "segments_started": self.segments_started,
             "segments_completed": self.segments_completed,
             "last_inference_seconds": self.last_inference_seconds,

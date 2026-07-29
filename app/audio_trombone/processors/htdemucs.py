@@ -45,7 +45,7 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
     pacing rather than bursting an entire separated segment at once.
     """
 
-    _log_name = "HTDemucs"
+    _model_label = "HTDemucs"
     name = "htdemucs-vocals"
     description = (
         "Buffered HTDemucs vocal reduction. Adds a fixed multi-second delay and "
@@ -164,7 +164,8 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
             1.0 - self.vocal_reduction,
         )
 
-    def _prepare_waveform(self, samples: array, channels: int) -> Any:
+    def _to_channel_first_waveform(self, samples: array, channels: int) -> Any:
+        """Reshape flat interleaved samples into a [channels, frames] tensor."""
         import torch
 
         waveform = torch.tensor(samples, dtype=torch.float32)
@@ -208,7 +209,7 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
 
         import torch
 
-        waveform = self._prepare_waveform(samples, channels)
+        waveform = self._to_channel_first_waveform(samples, channels)
         target_frames = len(samples) // channels
         with torch.inference_mode():
             output = self._reduce_vocals(waveform, sample_rate)

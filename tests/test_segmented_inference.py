@@ -7,7 +7,7 @@ from audio_trombone.processors.segmented_inference import SegmentedInferenceProc
 
 
 class ConcreteSegmentedProcessor(SegmentedInferenceProcessor):
-    _log_name = "Concrete"
+    _model_label = "Concrete"
     name = "concrete-segmented"
     description = "minimal concrete processor for exercising base defaults"
     capabilities = ProcessorCapabilities(

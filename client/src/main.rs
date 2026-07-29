@@ -105,10 +105,15 @@ fn negotiate_devices(host: &cpal::Host, cli: &Cli) -> Result<DeviceSetup> {
         "output",
     )?;
 
-    let input_config =
-        choose_config::<InputDirection>(&input_device, cli.sample_rate, cli.channels)?;
-    let output_config = choose_config::<OutputDirection>(
+    let input_config = choose_config(
+        &input_device,
+        Direction::Input,
+        cli.sample_rate,
+        cli.channels,
+    )?;
+    let output_config = choose_config(
         &output_device,
+        Direction::Output,
         input_config.sample_rate.0,
         input_config.channels,
     )?;
@@ -437,86 +442,66 @@ fn find_matching_config(
         })
 }
 
-/// Bridges cpal's asymmetric `Device` API (separate input/output methods,
-/// no shared trait) so `choose_config` can pick between them via the type
-/// system instead of a runtime direction flag. `supported_configs` still
-/// boxes its iterator — cpal's input/output config iterators are different
-/// concrete types — but which device methods get called is resolved at
-/// compile time via monomorphization, not a branch inside `choose_config`.
-trait DeviceDirection {
-    const LABEL: &'static str;
-
-    fn supported_configs(
-        device: &Device,
-    ) -> Result<
-        Box<dyn Iterator<Item = SupportedStreamConfigRange>>,
-        cpal::SupportedStreamConfigsError,
-    >;
-
-    fn default_config(
-        device: &Device,
-    ) -> Result<cpal::SupportedStreamConfig, cpal::DefaultStreamConfigError>;
+#[derive(Clone, Copy)]
+enum Direction {
+    Input,
+    Output,
 }
 
-struct InputDirection;
+impl Direction {
+    fn label(self) -> &'static str {
+        match self {
+            Direction::Input => "input",
+            Direction::Output => "output",
+        }
+    }
 
-impl DeviceDirection for InputDirection {
-    const LABEL: &'static str = "input";
-
+    /// cpal exposes separate, differently-typed iterators for input vs.
+    /// output configs, so this still boxes to unify them into one return type.
     fn supported_configs(
+        self,
         device: &Device,
     ) -> Result<
         Box<dyn Iterator<Item = SupportedStreamConfigRange>>,
         cpal::SupportedStreamConfigsError,
     > {
-        Ok(Box::new(device.supported_input_configs()?))
+        match self {
+            Direction::Input => Ok(Box::new(device.supported_input_configs()?)),
+            Direction::Output => Ok(Box::new(device.supported_output_configs()?)),
+        }
     }
 
     fn default_config(
+        self,
         device: &Device,
     ) -> Result<cpal::SupportedStreamConfig, cpal::DefaultStreamConfigError> {
-        device.default_input_config()
-    }
-}
-
-struct OutputDirection;
-
-impl DeviceDirection for OutputDirection {
-    const LABEL: &'static str = "output";
-
-    fn supported_configs(
-        device: &Device,
-    ) -> Result<
-        Box<dyn Iterator<Item = SupportedStreamConfigRange>>,
-        cpal::SupportedStreamConfigsError,
-    > {
-        Ok(Box::new(device.supported_output_configs()?))
-    }
-
-    fn default_config(
-        device: &Device,
-    ) -> Result<cpal::SupportedStreamConfig, cpal::DefaultStreamConfigError> {
-        device.default_output_config()
+        match self {
+            Direction::Input => device.default_input_config(),
+            Direction::Output => device.default_output_config(),
+        }
     }
 }
 
 /// Picks a device's stream config, preferring an exact match for
 /// `preferred_rate`/`preferred_channels` and falling back to the device
 /// default (if it's f32) otherwise.
-fn choose_config<D: DeviceDirection>(
+fn choose_config(
     device: &Device,
+    direction: Direction,
     preferred_rate: u32,
     preferred_channels: u16,
 ) -> Result<StreamConfig> {
-    let kind = D::LABEL;
-    let ranges = D::supported_configs(device)
+    let kind = direction.label();
+    let ranges = direction
+        .supported_configs(device)
         .with_context(|| format!("failed to read {kind} configurations"))?;
     if let Some(config) = find_matching_config(ranges, preferred_rate, preferred_channels) {
         return Ok(config);
     }
 
-    let default =
-        D::default_config(device).with_context(|| format!("no default {kind} configuration"))?;
+    let default = direction
+        .default_config(device)
+        .with_context(|| format!("no default {kind} configuration"))?;
     if default.sample_format() != SampleFormat::F32 {
         bail!("prototype currently requires an f32 {kind} device configuration");
     }

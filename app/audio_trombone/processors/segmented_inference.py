@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 class SegmentedInferenceProcessor(AudioProcessor):
     """Base class for buffered, segment-at-a-time separators.
 
-    Subclasses must set `_log_name` (used in log/error text and the
+    Subclasses must set `_model_label` (used in log/error text and the
     background task name) and implement `_decode_and_validate` and
     `_run_inference`.
     """
 
-    _log_name: str
+    _model_label: str
 
     def __init__(
         self,
@@ -153,7 +153,7 @@ class SegmentedInferenceProcessor(AudioProcessor):
             return result
 
         self._inference_task = asyncio.create_task(
-            infer(), name=f"{self._log_name.lower()}-segment-{self.segments_started}"
+            infer(), name=f"{self._model_label.lower()}-segment-{self.segments_started}"
         )
 
     async def _harvest_inference(self) -> None:
@@ -175,14 +175,14 @@ class SegmentedInferenceProcessor(AudioProcessor):
         except Exception as exc:
             self.last_error = str(exc)
             self._active_packets.clear()
-            raise RuntimeError(f"{self._log_name} inference failed: {exc}") from exc
+            raise RuntimeError(f"{self._model_label} inference failed: {exc}") from exc
 
     def _distribute_segment_output(self, separated: array) -> None:
         expected = sum(packet.frames * packet.channels for packet in self._active_packets)
         if len(separated) != expected:
             self._active_packets.clear()
             raise RuntimeError(
-                f"{self._log_name} returned {len(separated)} samples; expected {expected}"
+                f"{self._model_label} returned {len(separated)} samples; expected {expected}"
             )
 
         offset = 0
@@ -200,7 +200,7 @@ class SegmentedInferenceProcessor(AudioProcessor):
         self.last_error = None
         logger.info(
             "%s segment complete: inference=%.3fs rtf=%.3f ready_packets=%d",
-            self._log_name,
+            self._model_label,
             self.last_inference_seconds or 0.0,
             self.last_real_time_factor or 0.0,
             len(self._ready_output),
