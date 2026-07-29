@@ -49,7 +49,11 @@ RUNTIME_SETTING_GROUPS: dict[str, dict[str, str]] = {
 
 _ALL_SETTING_FIELDS: frozenset[str] = frozenset(
     {"processor"}
-    | {attribute for group in RUNTIME_SETTING_GROUPS.values() for attribute in group.values()}
+    | {
+        attribute
+        for group in RUNTIME_SETTING_GROUPS.values()
+        for attribute in group.values()
+    }
 )
 
 
@@ -60,7 +64,8 @@ def _settings_snapshot(settings: Settings) -> dict[str, object]:
     snapshot: dict[str, object] = {"processor": settings.processor}
     for group_name, fields in RUNTIME_SETTING_GROUPS.items():
         snapshot[group_name] = {
-            field_name: getattr(settings, attribute) for field_name, attribute in fields.items()
+            field_name: getattr(settings, attribute)
+            for field_name, attribute in fields.items()
         }
     return snapshot
 
@@ -93,7 +98,9 @@ class TromboneService:
             maxsize=settings.input_queue_size
         )
         self.processor_registry = ProcessorRegistry(settings)
-        self.processor: AudioProcessor = self.processor_registry.create(settings.processor)
+        self.processor: AudioProcessor = self.processor_registry.create(
+            settings.processor
+        )
         self.transport: asyncio.DatagramTransport | None = None
         self.protocol: UdpIngressProtocol | None = None
         self.worker_task: asyncio.Task[None] | None = None
@@ -167,7 +174,9 @@ class TromboneService:
         snapshot["startup_defaults"] = _settings_snapshot(self.startup_settings)
         return snapshot
 
-    async def update_runtime_settings(self, updates: dict[str, object]) -> dict[str, object]:
+    async def update_runtime_settings(
+        self, updates: dict[str, object]
+    ) -> dict[str, object]:
         unknown = set(updates) - _ALL_SETTING_FIELDS
         if unknown:
             raise ValueError(f"Unknown runtime settings: {', '.join(sorted(unknown))}")
@@ -227,7 +236,9 @@ class TromboneService:
         ),
     )
 
-    def _find_live_apply_rule(self, updates: dict[str, object]) -> "_LiveApplyRule | None":
+    def _find_live_apply_rule(
+        self, updates: dict[str, object]
+    ) -> "_LiveApplyRule | None":
         keys = set(updates)
         if len(keys) != 1:
             return None
@@ -263,62 +274,81 @@ class TromboneService:
 
     @staticmethod
     def _validate_demucs_settings(settings: Settings) -> None:
-        TromboneService._raise_first_failure((
-            (bool(settings.demucs_model.strip()), "demucs model must not be empty"),
-            (settings.demucs_segment_seconds > 0, "Demucs segment_seconds must be greater than zero"),
-            (0 <= settings.demucs_overlap < 1, "Demucs overlap must be between 0.0 and less than 1.0"),
-            (settings.demucs_shifts >= 0, "Demucs shifts must be zero or greater"),
+        TromboneService._raise_first_failure(
             (
-                0 <= settings.demucs_vocal_reduction <= 1,
-                "Demucs vocal_reduction must be between 0.0 and 1.0",
-            ),
-        ))
+                (bool(settings.demucs_model.strip()), "demucs model must not be empty"),
+                (
+                    settings.demucs_segment_seconds > 0,
+                    "Demucs segment_seconds must be greater than zero",
+                ),
+                (
+                    0 <= settings.demucs_overlap < 1,
+                    "Demucs overlap must be between 0.0 and less than 1.0",
+                ),
+                (settings.demucs_shifts >= 0, "Demucs shifts must be zero or greater"),
+                (
+                    0 <= settings.demucs_vocal_reduction <= 1,
+                    "Demucs vocal_reduction must be between 0.0 and 1.0",
+                ),
+            )
+        )
 
     @staticmethod
     def _validate_convtasnet_settings(settings: Settings) -> None:
-        TromboneService._raise_first_failure((
-            (bool(settings.convtasnet_model_path.strip()), "ConvTasNet model_path must not be empty"),
+        TromboneService._raise_first_failure(
             (
-                settings.convtasnet_segment_seconds > 0,
-                "ConvTasNet segment_seconds must be greater than zero",
-            ),
-            (
-                0 <= settings.convtasnet_vocal_reduction <= 1,
-                "ConvTasNet vocal_reduction must be between 0.0 and 1.0",
-            ),
-            (
-                settings.convtasnet_vocal_source_index >= 0,
-                "ConvTasNet vocal_source_index must be zero or greater",
-            ),
-            (
-                settings.convtasnet_accompaniment_source_index >= 0,
-                "ConvTasNet accompaniment_source_index must be zero or greater",
-            ),
-            (
-                settings.convtasnet_vocal_source_index != settings.convtasnet_accompaniment_source_index,
-                "ConvTasNet vocal and accompaniment source indexes must differ",
-            ),
-        ))
+                (
+                    bool(settings.convtasnet_model_path.strip()),
+                    "ConvTasNet model_path must not be empty",
+                ),
+                (
+                    settings.convtasnet_segment_seconds > 0,
+                    "ConvTasNet segment_seconds must be greater than zero",
+                ),
+                (
+                    0 <= settings.convtasnet_vocal_reduction <= 1,
+                    "ConvTasNet vocal_reduction must be between 0.0 and 1.0",
+                ),
+                (
+                    settings.convtasnet_vocal_source_index >= 0,
+                    "ConvTasNet vocal_source_index must be zero or greater",
+                ),
+                (
+                    settings.convtasnet_accompaniment_source_index >= 0,
+                    "ConvTasNet accompaniment_source_index must be zero or greater",
+                ),
+                (
+                    settings.convtasnet_vocal_source_index
+                    != settings.convtasnet_accompaniment_source_index,
+                    "ConvTasNet vocal and accompaniment source indexes must differ",
+                ),
+            )
+        )
 
     @staticmethod
     def _validate_mdx23c_settings(settings: Settings) -> None:
-        TromboneService._raise_first_failure((
+        TromboneService._raise_first_failure(
             (
-                settings.mdx23c_segment_seconds in SUPPORTED_SEGMENTS,
-                "MDX23C segment_seconds must be one of "
-                f"{', '.join(str(value) for value in SUPPORTED_SEGMENTS)}",
-            ),
-            (0 <= settings.mdx23c_overlap < 0.5, "MDX23C overlap must be between 0.0 and less than 0.5"),
-            (settings.mdx23c_batch_size == 1, "MDX23C batch_size must be 1"),
-            (
-                0 <= settings.mdx23c_vocal_reduction <= 1,
-                "MDX23C vocal_reduction must be between 0.0 and 1.0",
-            ),
-            (
-                settings.mdx23c_precision in {"float32", "float16", "bfloat16"},
-                "MDX23C precision must be float32, float16, or bfloat16",
-            ),
-        ))
+                (
+                    settings.mdx23c_segment_seconds in SUPPORTED_SEGMENTS,
+                    "MDX23C segment_seconds must be one of "
+                    f"{', '.join(str(value) for value in SUPPORTED_SEGMENTS)}",
+                ),
+                (
+                    0 <= settings.mdx23c_overlap < 0.5,
+                    "MDX23C overlap must be between 0.0 and less than 0.5",
+                ),
+                (settings.mdx23c_batch_size == 1, "MDX23C batch_size must be 1"),
+                (
+                    0 <= settings.mdx23c_vocal_reduction <= 1,
+                    "MDX23C vocal_reduction must be between 0.0 and 1.0",
+                ),
+                (
+                    settings.mdx23c_precision in {"float32", "float16", "bfloat16"},
+                    "MDX23C precision must be float32, float16, or bfloat16",
+                ),
+            )
+        )
 
     async def _processing_loop(self) -> None:
         while True:
@@ -352,9 +382,7 @@ class TromboneService:
             logger.error("Cannot forward packet: UDP transport is unavailable")
             return
         destination_host = (
-            output.destination_host
-            or self.settings.return_host
-            or fallback_host
+            output.destination_host or self.settings.return_host or fallback_host
         )
         destination_port = output.destination_port or self.settings.output_port
         try:
@@ -373,7 +401,9 @@ class TromboneService:
         async for output in self.processor.flush():
             fallback_host = self.settings.return_host or self.metrics.last_sender_host
             if fallback_host is None:
-                logger.warning("Discarding flushed packet because no destination is known")
+                logger.warning(
+                    "Discarding flushed packet because no destination is known"
+                )
                 continue
             self.metrics.packets_emitted += 1
             self._send_output(output, fallback_host)

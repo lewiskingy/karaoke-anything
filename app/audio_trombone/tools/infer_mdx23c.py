@@ -39,7 +39,12 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for index, stem in enumerate(adapter.stems):
-        pcm_bytes = (estimates[0, index].t().contiguous() * 32767).to(torch.int16).numpy().tobytes()
+        pcm_bytes = (
+            (estimates[0, index].t().contiguous() * 32767)
+            .to(torch.int16)
+            .numpy()
+            .tobytes()
+        )
         with wave.open(str(args.output_dir / f"{stem}.wav"), "wb") as target:
             target.setnchannels(2)
             target.setsampwidth(2)
@@ -47,7 +52,9 @@ def main() -> None:
             target.writeframes(pcm_bytes)
 
     print(f"input: [1, 2, {waveform.shape[-1]}] @ {rate} Hz")
-    print(f"output: {tuple(estimates.shape)} stems={adapter.stems}; length trimmed to input")
+    print(
+        f"output: {tuple(estimates.shape)} stems={adapter.stems}; length trimmed to input"
+    )
 
 
 if __name__ == "__main__":

@@ -33,11 +33,20 @@ def test_infer_writes_stem_wavs_and_prints_summary(
     _write_wav(input_wav)
     output_dir = tmp_path / "out"
 
-    monkeypatch.setattr("audio_trombone.tools.infer_mdx23c.MDX23CAdapter", _FakeAdapterForInfer)
+    monkeypatch.setattr(
+        "audio_trombone.tools.infer_mdx23c.MDX23CAdapter", _FakeAdapterForInfer
+    )
     monkeypatch.setattr(
         sys,
         "argv",
-        ["infer_mdx23c", str(input_wav), "--output-dir", str(output_dir), "--device", "cpu"],
+        [
+            "infer_mdx23c",
+            str(input_wav),
+            "--output-dir",
+            str(output_dir),
+            "--device",
+            "cpu",
+        ],
     )
 
     from audio_trombone.tools import infer_mdx23c
@@ -57,7 +66,9 @@ def test_infer_rejects_non_stereo_16bit_wav(
     mono_wav = tmp_path / "mono.wav"
     _write_wav(mono_wav, channels=1)
 
-    monkeypatch.setattr("audio_trombone.tools.infer_mdx23c.MDX23CAdapter", _FakeAdapterForInfer)
+    monkeypatch.setattr(
+        "audio_trombone.tools.infer_mdx23c.MDX23CAdapter", _FakeAdapterForInfer
+    )
     monkeypatch.setattr(sys, "argv", ["infer_mdx23c", str(mono_wav)])
 
     from audio_trombone.tools import infer_mdx23c
@@ -76,7 +87,14 @@ def test_infer_module_runs_as_script(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["infer_mdx23c", str(input_wav), "--output-dir", str(output_dir), "--device", "cpu"],
+        [
+            "infer_mdx23c",
+            str(input_wav),
+            "--output-dir",
+            str(output_dir),
+            "--device",
+            "cpu",
+        ],
     )
     monkeypatch.delitem(sys.modules, "audio_trombone.tools.infer_mdx23c", raising=False)
     monkeypatch.setitem(
@@ -111,7 +129,15 @@ def _patch_cuda_benchmark_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["benchmark_mdx23c", "--device", "cuda", "--segments", "0.25", "--overlaps", "0"],
+        [
+            "benchmark_mdx23c",
+            "--device",
+            "cuda",
+            "--segments",
+            "0.25",
+            "--overlaps",
+            "0",
+        ],
     )
 
 
@@ -134,7 +160,9 @@ def test_benchmark_module_runs_as_script(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
     _patch_cuda_benchmark_env(monkeypatch)
-    monkeypatch.delitem(sys.modules, "audio_trombone.tools.benchmark_mdx23c", raising=False)
+    monkeypatch.delitem(
+        sys.modules, "audio_trombone.tools.benchmark_mdx23c", raising=False
+    )
 
     runpy.run_module("audio_trombone.tools.benchmark_mdx23c", run_name="__main__")
 

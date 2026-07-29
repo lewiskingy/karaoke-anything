@@ -2,3 +2,6 @@
 asyncio_mode = "auto"
 pythonpath = ["app"]
 addopts = "--cov=app --cov-report=term-missing --cov-fail-under=100"
+
+[tool.ruff]
+target-version = "py313"

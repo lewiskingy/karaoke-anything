@@ -64,7 +64,9 @@ class ConvTasNetLyricsProcessor(SegmentedInferenceProcessor):
         inference_fn: InferenceFunction | None = None,
     ) -> None:
         config = config or ConvTasNetLyricsConfig()
-        super().__init__(segment_seconds=config.segment_seconds, inference_fn=inference_fn)
+        super().__init__(
+            segment_seconds=config.segment_seconds, inference_fn=inference_fn
+        )
 
         self.model_path = config.model_path
         self.requested_device = config.device
@@ -184,16 +186,23 @@ class ConvTasNetLyricsProcessor(SegmentedInferenceProcessor):
                 f"received shape {tuple(estimates.shape)}"
             )
         source_count = estimates.shape[1]
-        if max(self.vocal_source_index, self.accompaniment_source_index) >= source_count:
+        if (
+            max(self.vocal_source_index, self.accompaniment_source_index)
+            >= source_count
+        ):
             raise RuntimeError(
                 "Configured ConvTasNet source index exceeds model output count: "
                 f"sources={source_count}"
             )
 
         accompaniment = estimates[0, self.accompaniment_source_index]
-        return accompaniment * self.vocal_reduction + waveform[0] * (1.0 - self.vocal_reduction)
+        return accompaniment * self.vocal_reduction + waveform[0] * (
+            1.0 - self.vocal_reduction
+        )
 
-    def _finalize_output(self, output: Any, sample_rate: int, target_frames: int) -> Any:
+    def _finalize_output(
+        self, output: Any, sample_rate: int, target_frames: int
+    ) -> Any:
         import torch
         import torchaudio.functional as audio_functional
 

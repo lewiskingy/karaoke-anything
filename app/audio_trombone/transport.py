@@ -28,7 +28,9 @@ class UdpIngressProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         if len(data) > self.max_packet_size:
             self.metrics.packets_dropped += 1
-            logger.warning("Dropping oversized packet of %d bytes from %s", len(data), addr)
+            logger.warning(
+                "Dropping oversized packet of %d bytes from %s", len(data), addr
+            )
             return
 
         host, port = addr
@@ -48,7 +50,9 @@ class UdpIngressProtocol(asyncio.DatagramProtocol):
             )
         except asyncio.QueueFull:
             self.metrics.packets_dropped += 1
-            logger.warning("Dropping packet from %s:%d because input queue is full", host, port)
+            logger.warning(
+                "Dropping packet from %s:%d because input queue is full", host, port
+            )
 
     def error_received(self, exc: Exception) -> None:
         logger.warning("UDP ingress error: %s", exc)

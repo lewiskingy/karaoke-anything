@@ -143,7 +143,9 @@ async def test_flush_drains_ready_output() -> None:
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     from audio_trombone.models import ProcessedPacket
 
-    processor._ready_output.append(ProcessedPacket(payload=decoded.encode_samples(decoded.samples)))
+    processor._ready_output.append(
+        ProcessedPacket(payload=decoded.encode_samples(decoded.samples))
+    )
 
     flushed = [item async for item in processor.flush()]
 
@@ -168,7 +170,9 @@ def test_accept_stream_format_rejects_change_without_reset() -> None:
     changed_payload = bytes(changed_header) + array("f", [0.1, 0.2, 0.3, 0.4]).tobytes()
     changed = KanyPacket.decode(changed_payload)
 
-    with pytest.raises(ValueError, match="audio format changed without processor reset"):
+    with pytest.raises(
+        ValueError, match="audio format changed without processor reset"
+    ):
         processor._accept_stream_format(changed)
 
 
@@ -275,7 +279,9 @@ def test_load_separator_raises_when_demucs_dependencies_missing(
         processor._load_separator()
 
 
-def test_load_separator_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_separator_auto_selects_cpu_when_no_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import torch
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
@@ -290,7 +296,9 @@ def test_load_separator_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyP
     assert instances[0].model == "htdemucs"
 
 
-def test_load_separator_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_separator_honours_explicit_cpu_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     instances: list = []
     _install_fake_demucs(monkeypatch, instances)
     processor = make_processor(device="cpu")
@@ -300,7 +308,9 @@ def test_load_separator_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPa
     assert processor._device == "cpu"
 
 
-def test_load_separator_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_separator_rejects_cuda_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import torch
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
@@ -330,7 +340,9 @@ def test_run_inference_runs_real_torch_path_with_resample_and_padding(
             vocals = torch.zeros_like(waveform)
             return waveform, {"vocals": vocals}
 
-    install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
+    install_fake_torchaudio(
+        monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1]
+    )
 
     processor = make_processor(vocal_reduction=1.0)
     processor._separator = FakeSeparator()
@@ -342,7 +354,9 @@ def test_run_inference_runs_real_torch_path_with_resample_and_padding(
     assert all(-1.0 <= value <= 1.0 for value in result)
 
 
-def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_inference_skips_resample_when_rates_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import torch
 
     class FakeSeparator:
@@ -367,14 +381,18 @@ def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.Monke
     assert list(result) == pytest.approx(list(samples), abs=1e-6)
 
 
-def test_run_inference_raises_when_vocals_stem_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_inference_raises_when_vocals_stem_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeSeparator:
         samplerate = 1_000
 
         def separate_tensor(self, waveform, *, sr):
             return waveform, {}
 
-    install_fake_torchaudio(monkeypatch, resample=lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
+    install_fake_torchaudio(
+        monkeypatch, resample=lambda *a, **k: (_ for _ in ()).throw(AssertionError())
+    )
 
     processor = make_processor()
     processor._separator = FakeSeparator()

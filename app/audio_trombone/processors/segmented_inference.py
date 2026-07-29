@@ -184,7 +184,9 @@ class SegmentedInferenceProcessor(AudioProcessor):
             raise RuntimeError(f"{self._model_label} inference failed: {exc}") from exc
 
     def _distribute_segment_output(self, separated: array) -> None:
-        expected = sum(packet.frames * packet.channels for packet in self._active_packets)
+        expected = sum(
+            packet.frames * packet.channels for packet in self._active_packets
+        )
         if len(separated) != expected:
             self._active_packets.clear()
             raise RuntimeError(

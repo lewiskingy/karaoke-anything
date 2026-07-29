@@ -65,7 +65,9 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
         inference_fn: InferenceFunction | None = None,
     ) -> None:
         config = config or HTDemucsConfig()
-        super().__init__(segment_seconds=config.segment_seconds, inference_fn=inference_fn)
+        super().__init__(
+            segment_seconds=config.segment_seconds, inference_fn=inference_fn
+        )
 
         self.model_name = config.model_name
         self.requested_device = config.device
@@ -89,7 +91,9 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
         try:
             decoded = KanyPacket.decode(payload)
         except KanyProtocolError as exc:
-            raise ValueError(f"HTDemucs requires KANY v1 f32 PCM packets: {exc}") from exc
+            raise ValueError(
+                f"HTDemucs requires KANY v1 f32 PCM packets: {exc}"
+            ) from exc
 
         if decoded.channels != 2:
             raise ValueError(
@@ -136,7 +140,9 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
             self._device = self.requested_device
 
         if self._device.startswith("cuda") and not torch.cuda.is_available():
-            raise RuntimeError("DEMUCS_DEVICE requests CUDA but PyTorch cannot see a GPU")
+            raise RuntimeError(
+                "DEMUCS_DEVICE requests CUDA but PyTorch cannot see a GPU"
+            )
 
         logger.info(
             "Loading Demucs model=%s device=%s segment=%.2fs overlap=%.2f shifts=%d vocal_reduction=%.2f",
@@ -181,7 +187,9 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
         # vocal stem completely; intermediate values retain some guide vocal.
         return original - (vocals * self.vocal_reduction)
 
-    def _finalize_output(self, output: Any, sample_rate: int, target_frames: int) -> Any:
+    def _finalize_output(
+        self, output: Any, sample_rate: int, target_frames: int
+    ) -> Any:
         import torch
         import torchaudio.functional as audio_functional
 

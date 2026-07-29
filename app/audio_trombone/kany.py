@@ -39,7 +39,9 @@ class KanyPacket:
     @classmethod
     def decode(cls, payload: bytes) -> "KanyPacket":
         cls._validate_header(payload)
-        channels, sample_rate, sequence, timestamp_us, frames = cls._parse_header_fields(payload)
+        channels, sample_rate, sequence, timestamp_us, frames = (
+            cls._parse_header_fields(payload)
+        )
         cls._validate_body_length(payload, channels, frames)
 
         return cls(
@@ -60,7 +62,9 @@ class KanyPacket:
     @staticmethod
     def _validate_preamble(payload: bytes) -> None:
         if len(payload) < HEADER_SIZE:
-            raise KanyProtocolError(f"packet is shorter than the {HEADER_SIZE}-byte header")
+            raise KanyProtocolError(
+                f"packet is shorter than the {HEADER_SIZE}-byte header"
+            )
         if payload[0:4] != MAGIC:
             raise KanyProtocolError("incorrect packet magic")
 

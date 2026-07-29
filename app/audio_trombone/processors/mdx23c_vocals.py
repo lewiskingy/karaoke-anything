@@ -41,24 +41,32 @@ class MDX23CVocalsConfig:
     max_buffered_segments: int = 3
 
     def __post_init__(self) -> None:
-        _raise_first_failure((
+        _raise_first_failure(
             (
-                self.segment_seconds in SUPPORTED_SEGMENTS,
-                f"segment_seconds must be one of {SUPPORTED_SEGMENTS}",
-            ),
-            (
-                # `_crossfade` only ever blends up to half a segment
-                # (`frames // 2`), so overlap can't reach 0.5.
-                0 <= self.overlap < 0.5,
-                "overlap must be between 0.0 and less than 0.5",
-            ),
-            (self.batch_size == 1, "batch_size must be 1 for paced interactive processing"),
-            (0 <= self.vocal_reduction <= 1, "vocal_reduction must be between 0.0 and 1.0"),
-            (
-                self.precision in get_args(MDX23CPrecision),
-                "precision must be float32, float16, or bfloat16",
-            ),
-        ))
+                (
+                    self.segment_seconds in SUPPORTED_SEGMENTS,
+                    f"segment_seconds must be one of {SUPPORTED_SEGMENTS}",
+                ),
+                (
+                    # `_crossfade` only ever blends up to half a segment
+                    # (`frames // 2`), so overlap can't reach 0.5.
+                    0 <= self.overlap < 0.5,
+                    "overlap must be between 0.0 and less than 0.5",
+                ),
+                (
+                    self.batch_size == 1,
+                    "batch_size must be 1 for paced interactive processing",
+                ),
+                (
+                    0 <= self.vocal_reduction <= 1,
+                    "vocal_reduction must be between 0.0 and 1.0",
+                ),
+                (
+                    self.precision in get_args(MDX23CPrecision),
+                    "precision must be float32, float16, or bfloat16",
+                ),
+            )
+        )
 
 
 class MDX23CVocalsProcessor(AudioProcessor):
@@ -138,7 +146,9 @@ class MDX23CVocalsProcessor(AudioProcessor):
 
                 frames = round(self._adapter.sample_rate * self.segment_seconds)
                 await asyncio.to_thread(
-                    self._adapter.infer, torch.zeros(1, 2, frames), self._adapter.sample_rate
+                    self._adapter.infer,
+                    torch.zeros(1, 2, frames),
+                    self._adapter.sample_rate,
                 )
         else:
             self.model_loaded = True
@@ -192,7 +202,9 @@ class MDX23CVocalsProcessor(AudioProcessor):
     def _buffer_packet(self, decoded: KanyPacket) -> None:
         self._input_packets.append(decoded)
         self._input_frames += decoded.frames
-        maximum = round(decoded.sample_rate * self.segment_seconds * self.max_buffered_segments)
+        maximum = round(
+            decoded.sample_rate * self.segment_seconds * self.max_buffered_segments
+        )
         while self._input_frames > maximum and self._input_packets:
             dropped = self._input_packets.popleft()
             self._input_frames -= dropped.frames
@@ -204,7 +216,10 @@ class MDX23CVocalsProcessor(AudioProcessor):
         await self._track_stream_format(decoded)
         self._buffer_packet(decoded)
 
-        if self._inference_task is None and self._input_frames >= self._target_segment_frames():
+        if (
+            self._inference_task is None
+            and self._input_frames >= self._target_segment_frames()
+        ):
             self._launch_segment()
 
         if self._ready_output:
@@ -239,7 +254,9 @@ class MDX23CVocalsProcessor(AudioProcessor):
         started = time.perf_counter()
 
         async def run() -> array:
-            result = await asyncio.to_thread(self._run_inference, samples, packets[0].sample_rate, 2)
+            result = await asyncio.to_thread(
+                self._run_inference, samples, packets[0].sample_rate, 2
+            )
             elapsed = time.perf_counter() - started
             self.last_inference_seconds = elapsed
             self.last_real_time_factor = elapsed / (frames / packets[0].sample_rate)
@@ -270,14 +287,20 @@ class MDX23CVocalsProcessor(AudioProcessor):
         expected = sum(p.frames * 2 for p in self._active_packets)
         if len(output) != expected:
             self._active_packets.clear()
-            raise RuntimeError(f"MDX23C returned {len(output)} samples; expected {expected}")
+            raise RuntimeError(
+                f"MDX23C returned {len(output)} samples; expected {expected}"
+            )
 
         self._crossfade(output)
         offset = 0
         for original in self._active_packets:
             count = original.frames * 2
             self._ready_output.append(
-                ProcessedPacket(payload=original.encode_samples(array("f", output[offset : offset + count])))
+                ProcessedPacket(
+                    payload=original.encode_samples(
+                        array("f", output[offset : offset + count])
+                    )
+                )
             )
             offset += count
 
@@ -305,7 +328,9 @@ class MDX23CVocalsProcessor(AudioProcessor):
                 alpha = (frame + 1) / (overlap_frames + 1)
                 for channel in range(2):
                     index = frame * 2 + channel
-                    output[index] = self._previous_tail[index] * (1 - alpha) + output[index] * alpha
+                    output[index] = (
+                        self._previous_tail[index] * (1 - alpha) + output[index] * alpha
+                    )
         self._previous_tail = array("f", output[-samples:]) if samples else None
 
     def _run_inference(self, samples: array, sample_rate: int, channels: int) -> array:
@@ -320,14 +345,22 @@ class MDX23CVocalsProcessor(AudioProcessor):
         waveform = torch.tensor(samples).view(-1, 2).t().unsqueeze(0)
         original_frames = waveform.shape[-1]
         if sample_rate != self._adapter.sample_rate:
-            waveform = audio_functional.resample(waveform, sample_rate, self._adapter.sample_rate)
+            waveform = audio_functional.resample(
+                waveform, sample_rate, self._adapter.sample_rate
+            )
 
         estimates = self._adapter.infer(waveform, self._adapter.sample_rate)
-        instrumental = estimates[0, self._adapter.stem_index("instrumental", "other", "accompaniment")]
+        instrumental = estimates[
+            0, self._adapter.stem_index("instrumental", "other", "accompaniment")
+        ]
         original = waveform[0]
-        result = instrumental * self.vocal_reduction + original * (1 - self.vocal_reduction)
+        result = instrumental * self.vocal_reduction + original * (
+            1 - self.vocal_reduction
+        )
         if sample_rate != self._adapter.sample_rate:
-            result = audio_functional.resample(result, self._adapter.sample_rate, sample_rate)
+            result = audio_functional.resample(
+                result, self._adapter.sample_rate, sample_rate
+            )
 
         result = torch.nn.functional.pad(
             result, (0, max(0, original_frames - result.shape[-1]))

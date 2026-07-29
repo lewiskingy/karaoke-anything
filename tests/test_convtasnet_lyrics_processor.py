@@ -21,7 +21,9 @@ def make_processor(**kwargs) -> ConvTasNetLyricsProcessor:
     )
 
 
-def make_media_packet(sequence: int, samples: list[float], sample_rate: int = 1_000) -> MediaPacket:
+def make_media_packet(
+    sequence: int, samples: list[float], sample_rate: int = 1_000
+) -> MediaPacket:
     channels = 2
     frames = len(samples) // channels
     header = bytearray(HEADER_SIZE)
@@ -60,7 +62,9 @@ def test_segment_seconds_must_be_positive() -> None:
         make_processor(segment_seconds=0)
 
 
-@pytest.mark.parametrize("kwargs", [{"vocal_source_index": -1}, {"accompaniment_source_index": -1}])
+@pytest.mark.parametrize(
+    "kwargs", [{"vocal_source_index": -1}, {"accompaniment_source_index": -1}]
+)
 def test_source_indexes_must_be_non_negative(kwargs: dict) -> None:
     with pytest.raises(ValueError, match="source indexes"):
         make_processor(**kwargs)
@@ -160,9 +164,13 @@ def test_accept_stream_format_rejects_change_without_reset() -> None:
     first = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._accept_stream_format(first)
 
-    changed = KanyPacket.decode(make_media_packet(1, [0.1, 0.2, 0.3, 0.4], sample_rate=2_000).payload)
+    changed = KanyPacket.decode(
+        make_media_packet(1, [0.1, 0.2, 0.3, 0.4], sample_rate=2_000).payload
+    )
 
-    with pytest.raises(ValueError, match="audio format changed without processor reset"):
+    with pytest.raises(
+        ValueError, match="audio format changed without processor reset"
+    ):
         processor._accept_stream_format(changed)
 
 
@@ -212,7 +220,9 @@ async def _wrong_length() -> array:
         (_wrong_length, "ConvTasNet returned"),
     ],
 )
-async def test_harvest_inference_wraps_failed_or_malformed_result(failing_task, match) -> None:
+async def test_harvest_inference_wraps_failed_or_malformed_result(
+    failing_task, match
+) -> None:
     processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
@@ -227,7 +237,9 @@ async def test_harvest_inference_wraps_failed_or_malformed_result(failing_task, 
     assert processor._active_packets == []
 
 
-def test_load_model_raises_when_dependencies_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_model_raises_when_dependencies_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setitem(sys.modules, "audio_trombone.vendor.clarity_tasnet", None)
     processor = make_processor()
 
@@ -243,12 +255,16 @@ def _tiny_model():
     )
 
 
-def test_load_model_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_model_auto_selects_cpu_when_no_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(
-        ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
+        ConvTasNetStereo,
+        "from_pretrained",
+        classmethod(lambda cls, *a, **k: _tiny_model()),
     )
     processor = make_processor(device="auto")
 
@@ -259,11 +275,15 @@ def test_load_model_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch
     assert processor._model is not None
 
 
-def test_load_model_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_model_honours_explicit_cpu_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
     monkeypatch.setattr(
-        ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
+        ConvTasNetStereo,
+        "from_pretrained",
+        classmethod(lambda cls, *a, **k: _tiny_model()),
     )
     processor = make_processor(device="cpu")
 
@@ -272,12 +292,16 @@ def test_load_model_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch)
     assert processor._device == "cpu"
 
 
-def test_load_model_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_model_rejects_cuda_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from audio_trombone.vendor.clarity_tasnet import ConvTasNetStereo
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(
-        ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
+        ConvTasNetStereo,
+        "from_pretrained",
+        classmethod(lambda cls, *a, **k: _tiny_model()),
     )
     processor = make_processor(device="cuda")
 
@@ -333,7 +357,9 @@ def test_run_inference_raises_on_bad_model_output(
         processor._run_inference(array("f", [0.1, 0.2, 0.3, 0.4]), 1_000, 2)
 
 
-def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_inference_skips_resample_when_rates_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     install_fake_torchaudio(monkeypatch, resample=_reject_resample)
     processor = _processor_with_stub_model(
         lambda waveform: torch.zeros(*waveform.shape[:1], 2, *waveform.shape[1:]),
@@ -349,7 +375,9 @@ def test_run_inference_skips_resample_when_rates_match(monkeypatch: pytest.Monke
 def test_run_inference_runs_real_torch_path_with_resample_and_padding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_fake_torchaudio(monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1])
+    install_fake_torchaudio(
+        monkeypatch, resample=lambda tensor, orig_freq, new_freq: tensor[..., :-1]
+    )
     processor = _processor_with_stub_model(
         lambda waveform: torch.zeros(*waveform.shape[:1], 2, *waveform.shape[1:]),
         vocal_reduction=1.0,

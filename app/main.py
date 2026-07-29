@@ -43,6 +43,7 @@ class ConvTasNetSettingsUpdate(BaseModel):
 class CentreReductionSettingsUpdate(BaseModel):
     reduction: float | None = Field(default=None, ge=0, le=1)
 
+
 class MDX23CSettingsUpdate(BaseModel):
     device: str | None = None
     segment_seconds: float | None = None
@@ -72,9 +73,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title="Karaoke Anything",
     version="0.4.0",
-    description=(
-        "UDP media pipeline with pluggable processors and runtime controls."
-    ),
+    description=("UDP media pipeline with pluggable processors and runtime controls."),
     lifespan=lifespan,
 )
 
@@ -118,15 +117,22 @@ def _flatten_group(
             updates[settings_name] = value
 
 
-def _flatten_updates(payload: RuntimeSettingsUpdate, current: Settings) -> dict[str, object]:
+def _flatten_updates(
+    payload: RuntimeSettingsUpdate, current: Settings
+) -> dict[str, object]:
     updates: dict[str, object] = {}
     if payload.processor is not None and payload.processor != current.processor:
         updates["processor"] = payload.processor
     _flatten_group(updates, payload.demucs, RUNTIME_SETTING_GROUPS["demucs"], current)
-    _flatten_group(updates, payload.convtasnet, RUNTIME_SETTING_GROUPS["convtasnet"], current)
+    _flatten_group(
+        updates, payload.convtasnet, RUNTIME_SETTING_GROUPS["convtasnet"], current
+    )
     _flatten_group(updates, payload.mdx23c, RUNTIME_SETTING_GROUPS["mdx23c"], current)
     _flatten_group(
-        updates, payload.centre_reduction, RUNTIME_SETTING_GROUPS["centre_reduction"], current
+        updates,
+        payload.centre_reduction,
+        RUNTIME_SETTING_GROUPS["centre_reduction"],
+        current,
     )
     return updates
 

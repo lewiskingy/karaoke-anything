@@ -14,7 +14,9 @@ from audio_trombone.vendor.clarity_tasnet import (
 
 
 def _tiny_kwargs(**overrides):
-    kwargs = dict(N=4, L=4, B=4, H=4, P=3, X=1, R=1, C=2, audio_channels=2, samplerate=8_000)
+    kwargs = dict(
+        N=4, L=4, B=4, H=4, P=3, X=1, R=1, C=2, audio_channels=2, samplerate=8_000
+    )
     kwargs.update(overrides)
     return kwargs
 
@@ -44,7 +46,9 @@ def test_causal_model_uses_chomp1d_and_matches_input_length() -> None:
 
 
 def test_temporal_conv_net_softmax_branch_sums_to_one() -> None:
-    network = TemporalConvNet(N=4, B=4, H=4, P=3, X=1, R=1, C=3, mask_nonlinear="softmax")
+    network = TemporalConvNet(
+        N=4, B=4, H=4, P=3, X=1, R=1, C=3, mask_nonlinear="softmax"
+    )
     mixture_w = torch.randn(1, 4, 10)
 
     mask = network(mixture_w)

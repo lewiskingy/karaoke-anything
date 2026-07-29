@@ -65,7 +65,9 @@ def _build_adapter(
     monkeypatch.setattr(torch, "load", lambda *a, **k: {"weight": object()})
     config_path = _write_config(tmp_path, instruments or ["vocals", "instrumental"])
     checkpoint_path = _write_checkpoint(tmp_path)
-    return MDX23CAdapter(config_path, checkpoint_path, device=device, precision="float32")
+    return MDX23CAdapter(
+        config_path, checkpoint_path, device=device, precision="float32"
+    )
 
 
 def test_rejects_unsupported_precision() -> None:
@@ -160,9 +162,7 @@ def test_infer_rejects_stem_count_mismatch(
     import torch
 
     adapter = _build_adapter(monkeypatch, tmp_path)  # 2 stems declared
-    adapter.model.forward_fn = lambda waveform: torch.zeros(
-        1, 3, 2, waveform.shape[-1]
-    )
+    adapter.model.forward_fn = lambda waveform: torch.zeros(1, 3, 2, waveform.shape[-1])
 
     with pytest.raises(RuntimeError, match="returned 3 stems"):
         adapter.infer(torch.zeros(1, 2, 20), 8000)

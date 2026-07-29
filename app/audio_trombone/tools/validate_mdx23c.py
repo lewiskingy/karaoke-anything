@@ -36,7 +36,9 @@ def _strip_module_prefix(state: Mapping[str, Any]) -> dict[str, Any]:
     if prefix_variants == {True, False}:
         raise ValueError("mixed 'module.' prefixes are not supported")
     if prefix_variants == {True}:
-        return {key.removeprefix(SUPPORTED_PREFIX): value for key, value in state.items()}
+        return {
+            key.removeprefix(SUPPORTED_PREFIX): value for key, value in state.items()
+        }
     return dict(state)
 
 

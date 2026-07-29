@@ -15,7 +15,9 @@ from audio_trombone.tools.prepare_mdx23c_architecture import (
 
 def _prepared_helper(tmp_path: Path):
     architecture = tmp_path / "mdx23c_tfc_tdf_v3.py"
-    architecture.write_text(f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8")
+    architecture.write_text(
+        f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8"
+    )
     prepare(architecture)
 
     prepared = architecture.read_text(encoding="utf-8")
@@ -24,18 +26,22 @@ def _prepared_helper(tmp_path: Path):
     helper = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "prefer_target_instrument"
+        if isinstance(node, ast.FunctionDef) and node.name == "prefer_target_instrument"
     )
     namespace = {}
-    exec(compile(ast.Module(body=[helper], type_ignores=[]), str(architecture), "exec"), namespace)
+    exec(
+        compile(ast.Module(body=[helper], type_ignores=[]), str(architecture), "exec"),
+        namespace,
+    )
     return namespace["prefer_target_instrument"]
 
 
 def test_prefer_target_instrument_uses_present_target(tmp_path):
     helper = _prepared_helper(tmp_path)
     config = SimpleNamespace(
-        training=SimpleNamespace(target_instrument="Vocals", instruments=["Vocals", "Instrumental"])
+        training=SimpleNamespace(
+            target_instrument="Vocals", instruments=["Vocals", "Instrumental"]
+        )
     )
     assert helper(config) == ["Vocals"]
 
@@ -71,7 +77,9 @@ def test_prepare_rejects_unexpected_upstream_source(tmp_path):
 
 def test_main_parses_argv_and_prepares_architecture(tmp_path, monkeypatch):
     architecture = tmp_path / "mdx23c_tfc_tdf_v3.py"
-    architecture.write_text(f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8")
+    architecture.write_text(
+        f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8"
+    )
     monkeypatch.setattr(sys, "argv", ["prepare_mdx23c_architecture", str(architecture)])
 
     main()
@@ -81,7 +89,9 @@ def test_main_parses_argv_and_prepares_architecture(tmp_path, monkeypatch):
 
 def test_module_runs_as_script(tmp_path, monkeypatch):
     architecture = tmp_path / "mdx23c_tfc_tdf_v3.py"
-    architecture.write_text(f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8")
+    architecture.write_text(
+        f"{EXPECTED_IMPORT}\nclass Model:\n    pass\n", encoding="utf-8"
+    )
     monkeypatch.setattr(sys, "argv", ["prepare_mdx23c_architecture", str(architecture)])
     monkeypatch.delitem(
         sys.modules, "audio_trombone.tools.prepare_mdx23c_architecture", raising=False

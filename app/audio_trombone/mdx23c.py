@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any, Literal, get_args
 
 from audio_trombone.mdx23c_model_yaml import DEFAULT_CONFIG, load_config
-from audio_trombone.tools.validate_mdx23c import DEFAULT_CHECKPOINT, normalise_state_dict
+from audio_trombone.tools.validate_mdx23c import (
+    DEFAULT_CHECKPOINT,
+    normalise_state_dict,
+)
 
 MDX23CPrecision = Literal["float32", "float16", "bfloat16"]
 _SUPPORTED_PRECISIONS = set(get_args(MDX23CPrecision))
@@ -49,12 +52,20 @@ def _autocast_context(precision: MDX23CPrecision):
 
 def _has_valid_stem_shape(result: Any, waveform: Any) -> bool:
     """True when `result` is `[batch, stems, 2, frames]` for the given input batch."""
-    return result.ndim == 4 and result.shape[0] == waveform.shape[0] and result.shape[2] == 2
+    return (
+        result.ndim == 4
+        and result.shape[0] == waveform.shape[0]
+        and result.shape[2] == 2
+    )
 
 
-def _validate_waveform_input(waveform: Any, sample_rate: int, expected_rate: int) -> None:
+def _validate_waveform_input(
+    waveform: Any, sample_rate: int, expected_rate: int
+) -> None:
     if sample_rate != expected_rate:
-        raise ValueError(f"MDX23C requires {expected_rate} Hz input; received {sample_rate} Hz")
+        raise ValueError(
+            f"MDX23C requires {expected_rate} Hz input; received {sample_rate} Hz"
+        )
     if waveform.ndim != 3 or waveform.shape[1] != 2:
         raise ValueError(
             "MDX23C input must have shape [batch, 2, frames]; "
@@ -73,7 +84,9 @@ def _normalise_output(result: Any, waveform: Any, frames: int, stem_count: int) 
             f"received {tuple(result.shape)}"
         )
     if result.shape[1] != stem_count:
-        raise RuntimeError(f"MDX23C returned {result.shape[1]} stems; YAML declares {stem_count}")
+        raise RuntimeError(
+            f"MDX23C returned {result.shape[1]} stems; YAML declares {stem_count}"
+        )
     if result.shape[-1] < frames:
         result = torch.nn.functional.pad(result, (0, frames - result.shape[-1]))
     return result[..., :frames].to(dtype=torch.float32)
@@ -102,7 +115,9 @@ class MDX23CAdapter:
         self.checkpoint_path = Path(checkpoint_path)
         self.config = load_config(self.config_path)
         self.sample_rate = int(self.config.audio.sample_rate)
-        self.stems = tuple(str(item).lower() for item in self.config.training.instruments)
+        self.stems = tuple(
+            str(item).lower() for item in self.config.training.instruments
+        )
         self.device = _resolve_device(device, precision)
         self.precision = precision
         self.model = _load_model(self.config, self.checkpoint_path, self.device)
@@ -123,4 +138,6 @@ class MDX23CAdapter:
         for name in names:
             if name.lower() in self.stems:
                 return self.stems.index(name.lower())
-        raise RuntimeError(f"none of {names!r} appears in configured stems {self.stems!r}")
+        raise RuntimeError(
+            f"none of {names!r} appears in configured stems {self.stems!r}"
+        )

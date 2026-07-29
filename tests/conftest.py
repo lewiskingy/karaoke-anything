@@ -5,7 +5,9 @@ from typing import Callable
 import pytest
 
 
-def install_fake_torchaudio(monkeypatch: pytest.MonkeyPatch, resample: Callable) -> None:
+def install_fake_torchaudio(
+    monkeypatch: pytest.MonkeyPatch, resample: Callable
+) -> None:
     """Inject a fake ``torchaudio.functional`` module exposing only ``resample``.
 
     ``torchaudio`` isn't installed in this environment; model-backed processor
