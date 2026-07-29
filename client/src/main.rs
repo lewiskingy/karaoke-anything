@@ -1,8 +1,11 @@
+mod network;
+mod protocol;
+
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, StreamConfig};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Sender};
 use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{
@@ -10,12 +13,9 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-const MAGIC: &[u8; 4] = b"KANY";
-const VERSION: u8 = 1;
-const HEADER_SIZE: usize = 28;
-const SAMPLE_FORMAT_F32_LE: u8 = 1;
+use network::{receiver_loop, sender_loop, AudioFormat, ReceiverConfig, SenderConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "karaoke-anything-client")]
@@ -67,16 +67,6 @@ struct Cli {
 enum Command {
     /// List available input and output audio devices
     Devices,
-}
-
-#[derive(Debug)]
-struct AudioPacket {
-    channels: u16,
-    sample_rate: u32,
-    sequence: u32,
-    timestamp_us: u64,
-    frames: u16,
-    samples: Vec<f32>,
 }
 
 fn main() -> Result<()> {
@@ -173,31 +163,28 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
         max_playback_samples.max(1),
     )));
 
+    let format = AudioFormat {
+        channels,
+        sample_rate,
+    };
+
     let sender_running = Arc::clone(&running);
-    let server = cli.server;
-    let sender = thread::spawn(move || {
-        sender_loop(
-            send_socket,
-            server,
-            packet_rx,
-            sender_running,
-            channels,
-            sample_rate,
-            frames_per_packet as u16,
-        )
-    });
+    let sender_config = SenderConfig {
+        server: cli.server,
+        format,
+        frames_per_packet: frames_per_packet as u16,
+    };
+    let sender =
+        thread::spawn(move || sender_loop(&send_socket, packet_rx, sender_running, sender_config));
 
     let receiver_running = Arc::clone(&running);
     let receiver_queue = Arc::clone(&playback_queue);
+    let receiver_config = ReceiverConfig {
+        format,
+        max_samples: max_playback_samples,
+    };
     let receiver = thread::spawn(move || {
-        receiver_loop(
-            socket,
-            receiver_queue,
-            receiver_running,
-            channels,
-            sample_rate,
-            max_playback_samples,
-        )
+        receiver_loop(&socket, receiver_queue, receiver_running, receiver_config)
     });
 
     let capture_stream =
@@ -412,206 +399,4 @@ fn build_output_stream(
             None,
         )
         .context("failed to create output stream")
-}
-
-fn sender_loop(
-    socket: UdpSocket,
-    server: SocketAddr,
-    packets: Receiver<Vec<f32>>,
-    running: Arc<AtomicBool>,
-    channels: u16,
-    sample_rate: u32,
-    frames_per_packet: u16,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut sequence = 0u32;
-
-    while running.load(Ordering::SeqCst) {
-        match packets.recv_timeout(Duration::from_millis(100)) {
-            Ok(samples) => {
-                let timestamp_us = started.elapsed().as_micros() as u64;
-                let datagram = encode_packet(
-                    channels,
-                    sample_rate,
-                    sequence,
-                    timestamp_us,
-                    frames_per_packet,
-                    &samples,
-                )?;
-                socket
-                    .send_to(&datagram, server)
-                    .with_context(|| format!("failed to send audio to {server}"))?;
-                sequence = sequence.wrapping_add(1);
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    Ok(())
-}
-
-fn receiver_loop(
-    socket: UdpSocket,
-    queue: Arc<Mutex<VecDeque<f32>>>,
-    running: Arc<AtomicBool>,
-    expected_channels: u16,
-    expected_sample_rate: u32,
-    max_samples: usize,
-) -> Result<()> {
-    let mut buffer = vec![0u8; 65_535];
-    let mut expected_sequence: Option<u32> = None;
-
-    while running.load(Ordering::SeqCst) {
-        match socket.recv_from(&mut buffer) {
-            Ok((length, _)) => match decode_packet(&buffer[..length]) {
-                Ok(packet) => {
-                    if packet.channels != expected_channels
-                        || packet.sample_rate != expected_sample_rate
-                    {
-                        eprintln!(
-                            "ignored incompatible packet: {}Hz/{}ch",
-                            packet.sample_rate, packet.channels
-                        );
-                        continue;
-                    }
-
-                    if let Some(expected) = expected_sequence {
-                        if packet.sequence != expected {
-                            eprintln!(
-                                "sequence discontinuity: expected {}, received {}",
-                                expected, packet.sequence
-                            );
-                        }
-                    }
-                    expected_sequence = Some(packet.sequence.wrapping_add(1));
-
-                    let mut queue = queue
-                        .lock()
-                        .map_err(|_| anyhow!("playback queue poisoned"))?;
-                    while queue.len() + packet.samples.len() > max_samples && !queue.is_empty() {
-                        queue.pop_front();
-                    }
-                    queue.extend(packet.samples);
-                }
-                Err(error) => eprintln!("ignored invalid packet: {error:#}"),
-            },
-            Err(error)
-                if error.kind() == std::io::ErrorKind::WouldBlock
-                    || error.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(error) => return Err(error).context("failed receiving audio"),
-        }
-    }
-    Ok(())
-}
-
-fn encode_packet(
-    channels: u16,
-    sample_rate: u32,
-    sequence: u32,
-    timestamp_us: u64,
-    frames: u16,
-    samples: &[f32],
-) -> Result<Vec<u8>> {
-    let expected_samples = frames as usize * channels as usize;
-    if samples.len() != expected_samples {
-        bail!(
-            "sample count {} does not match {} frames × {} channels",
-            samples.len(),
-            frames,
-            channels
-        );
-    }
-    if channels == 0 || channels > u8::MAX as u16 {
-        bail!("channel count must be between 1 and 255");
-    }
-
-    let mut output = Vec::with_capacity(HEADER_SIZE + samples.len() * 4);
-    output.extend_from_slice(MAGIC);
-    output.push(VERSION);
-    output.push(0);
-    output.push(channels as u8);
-    output.push(SAMPLE_FORMAT_F32_LE);
-    output.extend_from_slice(&sample_rate.to_be_bytes());
-    output.extend_from_slice(&sequence.to_be_bytes());
-    output.extend_from_slice(&timestamp_us.to_be_bytes());
-    output.extend_from_slice(&frames.to_be_bytes());
-    output.extend_from_slice(&0u16.to_be_bytes());
-    for sample in samples {
-        output.extend_from_slice(&sample.to_le_bytes());
-    }
-    Ok(output)
-}
-
-fn decode_packet(data: &[u8]) -> Result<AudioPacket> {
-    if data.len() < HEADER_SIZE {
-        bail!("packet is shorter than the {}-byte header", HEADER_SIZE);
-    }
-    if &data[0..4] != MAGIC {
-        bail!("incorrect packet magic");
-    }
-    if data[4] != VERSION {
-        bail!("unsupported protocol version {}", data[4]);
-    }
-    if data[7] != SAMPLE_FORMAT_F32_LE {
-        bail!("unsupported sample format {}", data[7]);
-    }
-
-    let channels = data[6] as u16;
-    let sample_rate = u32::from_be_bytes(data[8..12].try_into().unwrap());
-    let sequence = u32::from_be_bytes(data[12..16].try_into().unwrap());
-    let timestamp_us = u64::from_be_bytes(data[16..24].try_into().unwrap());
-    let frames = u16::from_be_bytes(data[24..26].try_into().unwrap());
-
-    if channels == 0 || frames == 0 {
-        bail!("channels and frames must be non-zero");
-    }
-
-    let expected_payload = frames as usize * channels as usize * 4;
-    if data.len() != HEADER_SIZE + expected_payload {
-        bail!(
-            "payload length mismatch: expected {}, received {}",
-            expected_payload,
-            data.len() - HEADER_SIZE
-        );
-    }
-
-    let samples = data[HEADER_SIZE..]
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
-
-    Ok(AudioPacket {
-        channels,
-        sample_rate,
-        sequence,
-        timestamp_us,
-        frames,
-        samples,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn packet_round_trip() {
-        let samples = vec![0.0, 0.5, -0.5, 1.0];
-        let encoded = encode_packet(2, 48_000, 42, 1234, 2, &samples).unwrap();
-        let decoded = decode_packet(&encoded).unwrap();
-
-        assert_eq!(decoded.channels, 2);
-        assert_eq!(decoded.sample_rate, 48_000);
-        assert_eq!(decoded.sequence, 42);
-        assert_eq!(decoded.timestamp_us, 1234);
-        assert_eq!(decoded.frames, 2);
-        assert_eq!(decoded.samples, samples);
-    }
-
-    #[test]
-    fn malformed_payload_is_rejected() {
-        let mut encoded = encode_packet(2, 48_000, 1, 0, 1, &[0.0, 0.0]).unwrap();
-        encoded.pop();
-        assert!(decode_packet(&encoded).is_err());
-    }
 }

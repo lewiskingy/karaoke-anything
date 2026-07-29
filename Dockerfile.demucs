@@ -7,13 +7,17 @@ ARG MDX23C_MODEL_REVISION=0472e5cd4e0f77b95ca2df7a8162992e6799fa49
 # Upstream MDX23C implementation snapshot; override only with another reviewed commit.
 ARG MDX23C_ARCH_REVISION=83d495dfc81b2ede9bc62f4209619f8bdfd14995
 
+# CMAKE_POLICY_VERSION_MINIMUM works around CMake 4.x refusing to configure
+# projects with an old `cmake_minimum_required` -- needed to build the vendored
+# Opus C library pulled in by sphn (a demucs dependency) from source below.
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/app \
     TORCH_HOME=/models/torch \
-    HF_HUB_DISABLE_TELEMETRY=1
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    CMAKE_POLICY_VERSION_MINIMUM=3.5
 
 WORKDIR /app
 
@@ -25,7 +29,12 @@ RUN apt-get update \
         ffmpeg \
         curl \
         ca-certificates \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
+# build-essential (specifically a `cc` linker) is required to build the
+# `sphn` wheel below: sphn has no prebuilt wheel for this platform, so pip
+# builds it from source via maturin/pyo3, which auto-installs its own Rust
+# toolchain but still needs a system C linker for the final link step.
 
 COPY requirements.txt requirements-demucs.txt ./
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt \

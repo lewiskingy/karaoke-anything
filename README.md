@@ -104,9 +104,9 @@ The image downloads `cadenzachallenge/ConvTasNet_Lyrics_Causal` during build and
 
 The image also downloads only the pinned MDX23C 8KFFT YAML and checkpoint into
 `/models/mdx23c`, copies the pinned upstream MDX23C architecture module, and
-strictly loads the checkpoint on CPU during the build. This is a Stage 0
-compatibility proof only; MDX23C is not registered as a processor. Repeat the
-proof offline after building with:
+strictly loads the checkpoint on CPU during the build, as an offline
+compatibility smoke test independent of the `mdx23c-vocals` processor's own
+runtime model loading. Repeat the proof offline after building with:
 
 ```bash
 docker compose -f compose.yaml -f compose.demucs.yaml run --rm --no-deps \
@@ -234,16 +234,23 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
 pytest
+pre-commit install
 ```
+
+`pytest` enforces 100% statement coverage on `app/` (`--cov-fail-under=100` in `pyproject.toml`); a failing or coverage-reducing change fails the test run. `pre-commit install` wires the same check into a git pre-commit hook (config in `.pre-commit-config.yaml`) so it also runs before each commit.
 
 ### Client
 
 ```bash
 cd client
 cargo fmt --check
-cargo test
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
+cargo llvm-cov --ignore-filename-regex "main\.rs$" --fail-under-lines 100
 cargo build --release
 ```
+
+`protocol.rs` (KANY packet encode/decode) and `network.rs` (`sender_loop`/`receiver_loop`) are held at 100% line coverage; `cargo llvm-cov` fails if it drops below that. `main.rs` is excluded from the gate: `select_device`, `choose_*_config`, `build_*_stream`, `run()` and `main()` all operate on concrete `cpal::Device`/`cpal::Host` types with no mock backend, so they aren't practically unit-testable without real audio hardware. `sender_loop`/`receiver_loop` take `socket: &dyn AudioSocket` rather than a generic `<S: AudioSocket>` specifically so tests can inject a fake without creating a second, separately-covered monomorphization for the real `UdpSocket` call site in `run()`. The repository's pre-commit hook (see the Server section above) runs this same check.
 
 ## Security boundary
 

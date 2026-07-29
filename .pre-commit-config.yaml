@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: pytest-coverage
+        name: pytest (100% coverage required)
+        entry: pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: cargo-test-coverage
+        name: cargo llvm-cov (100% coverage required on protocol.rs/network.rs)
+        entry: scripts/check-rust-coverage.sh
+        language: system
+        pass_filenames: false
+        always_run: true

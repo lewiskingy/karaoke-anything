@@ -220,24 +220,24 @@ class TromboneService:
         logger.info("Runtime settings applied; processor reinitialised")
         return {"processor_restarted": True, "applies_from": "immediately"}
 
+    # (single settings key, processor it applies to, live-mutable attribute)
+    _LIVE_APPLY_RULES = (
+        ("demucs_vocal_reduction", "htdemucs-vocals", "vocal_reduction"),
+        ("mdx23c_vocal_reduction", "mdx23c-vocals", "vocal_reduction"),
+        ("convtasnet_vocal_reduction", "convtasnet-lyrics-causal", "vocal_reduction"),
+        ("centre_reduction", "stereo-centre-reduction", "centre_reduction"),
+    )
+
     def _can_apply_live(self, updates: dict[str, object]) -> bool:
         keys = set(updates)
-        return (
-            keys == {"demucs_vocal_reduction"}
-            and self.processor.name == "htdemucs-vocals"
-            and hasattr(self.processor, "vocal_reduction")
-        ) or (
-            keys == {"mdx23c_vocal_reduction"}
-            and self.processor.name == "mdx23c-vocals"
-            and hasattr(self.processor, "vocal_reduction")
-        ) or (
-            keys == {"convtasnet_vocal_reduction"}
-            and self.processor.name == "convtasnet-lyrics-causal"
-            and hasattr(self.processor, "vocal_reduction")
-        ) or (
-            keys == {"centre_reduction"}
-            and self.processor.name == "stereo-centre-reduction"
-            and hasattr(self.processor, "centre_reduction")
+        if len(keys) != 1:
+            return False
+        (key,) = keys
+        return any(
+            key == setting_key
+            and self.processor.name == processor_name
+            and hasattr(self.processor, attribute)
+            for setting_key, processor_name, attribute in self._LIVE_APPLY_RULES
         )
 
     async def restore_startup_settings(self) -> dict[str, object]:
@@ -269,40 +269,75 @@ class TromboneService:
     def _validate_runtime_settings(settings: Settings) -> None:
         if not settings.processor:
             raise ValueError("processor must not be empty")
-        if not settings.demucs_model.strip():
-            raise ValueError("demucs model must not be empty")
-        if settings.demucs_segment_seconds <= 0:
-            raise ValueError("Demucs segment_seconds must be greater than zero")
-        if not 0 <= settings.demucs_overlap < 1:
-            raise ValueError("Demucs overlap must be between 0.0 and less than 1.0")
-        if settings.demucs_shifts < 0:
-            raise ValueError("Demucs shifts must be zero or greater")
-        if not 0 <= settings.demucs_vocal_reduction <= 1:
-            raise ValueError("Demucs vocal_reduction must be between 0.0 and 1.0")
-        if not settings.convtasnet_model_path.strip():
-            raise ValueError("ConvTasNet model_path must not be empty")
-        if settings.convtasnet_segment_seconds <= 0:
-            raise ValueError("ConvTasNet segment_seconds must be greater than zero")
-        if not 0 <= settings.convtasnet_vocal_reduction <= 1:
-            raise ValueError("ConvTasNet vocal_reduction must be between 0.0 and 1.0")
-        if settings.convtasnet_vocal_source_index < 0:
-            raise ValueError("ConvTasNet vocal_source_index must be zero or greater")
-        if settings.convtasnet_accompaniment_source_index < 0:
-            raise ValueError("ConvTasNet accompaniment_source_index must be zero or greater")
-        if settings.convtasnet_vocal_source_index == settings.convtasnet_accompaniment_source_index:
-            raise ValueError("ConvTasNet vocal and accompaniment source indexes must differ")
+        TromboneService._validate_demucs_settings(settings)
+        TromboneService._validate_convtasnet_settings(settings)
+        TromboneService._validate_mdx23c_settings(settings)
         if not 0 <= settings.centre_reduction <= 1:
             raise ValueError("centre_reduction must be between 0.0 and 1.0")
-        if settings.mdx23c_segment_seconds not in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0):
-            raise ValueError("MDX23C segment_seconds must be one of 0.25, 0.5, 0.75, 1.0, 1.5, 2.0")
-        if not 0 <= settings.mdx23c_overlap < 0.5:
-            raise ValueError("MDX23C overlap must be between 0.0 and less than 0.5")
-        if settings.mdx23c_batch_size != 1:
-            raise ValueError("MDX23C batch_size must be 1")
-        if not 0 <= settings.mdx23c_vocal_reduction <= 1:
-            raise ValueError("MDX23C vocal_reduction must be between 0.0 and 1.0")
-        if settings.mdx23c_precision not in {"float32", "float16", "bfloat16"}:
-            raise ValueError("MDX23C precision must be float32, float16, or bfloat16")
+
+    @staticmethod
+    def _raise_first_failure(checks: tuple[tuple[bool, str], ...]) -> None:
+        for passed, message in checks:
+            if not passed:
+                raise ValueError(message)
+
+    @staticmethod
+    def _validate_demucs_settings(settings: Settings) -> None:
+        TromboneService._raise_first_failure((
+            (bool(settings.demucs_model.strip()), "demucs model must not be empty"),
+            (settings.demucs_segment_seconds > 0, "Demucs segment_seconds must be greater than zero"),
+            (0 <= settings.demucs_overlap < 1, "Demucs overlap must be between 0.0 and less than 1.0"),
+            (settings.demucs_shifts >= 0, "Demucs shifts must be zero or greater"),
+            (
+                0 <= settings.demucs_vocal_reduction <= 1,
+                "Demucs vocal_reduction must be between 0.0 and 1.0",
+            ),
+        ))
+
+    @staticmethod
+    def _validate_convtasnet_settings(settings: Settings) -> None:
+        TromboneService._raise_first_failure((
+            (bool(settings.convtasnet_model_path.strip()), "ConvTasNet model_path must not be empty"),
+            (
+                settings.convtasnet_segment_seconds > 0,
+                "ConvTasNet segment_seconds must be greater than zero",
+            ),
+            (
+                0 <= settings.convtasnet_vocal_reduction <= 1,
+                "ConvTasNet vocal_reduction must be between 0.0 and 1.0",
+            ),
+            (
+                settings.convtasnet_vocal_source_index >= 0,
+                "ConvTasNet vocal_source_index must be zero or greater",
+            ),
+            (
+                settings.convtasnet_accompaniment_source_index >= 0,
+                "ConvTasNet accompaniment_source_index must be zero or greater",
+            ),
+            (
+                settings.convtasnet_vocal_source_index != settings.convtasnet_accompaniment_source_index,
+                "ConvTasNet vocal and accompaniment source indexes must differ",
+            ),
+        ))
+
+    @staticmethod
+    def _validate_mdx23c_settings(settings: Settings) -> None:
+        TromboneService._raise_first_failure((
+            (
+                settings.mdx23c_segment_seconds in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0),
+                "MDX23C segment_seconds must be one of 0.25, 0.5, 0.75, 1.0, 1.5, 2.0",
+            ),
+            (0 <= settings.mdx23c_overlap < 0.5, "MDX23C overlap must be between 0.0 and less than 0.5"),
+            (settings.mdx23c_batch_size == 1, "MDX23C batch_size must be 1"),
+            (
+                0 <= settings.mdx23c_vocal_reduction <= 1,
+                "MDX23C vocal_reduction must be between 0.0 and 1.0",
+            ),
+            (
+                settings.mdx23c_precision in {"float32", "float16", "bfloat16"},
+                "MDX23C precision must be float32, float16, or bfloat16",
+            ),
+        ))
 
     async def _processing_loop(self) -> None:
         while True:

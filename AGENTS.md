@@ -91,7 +91,9 @@ The GPU image is currently `Dockerfile.demucs`, despite supporting more than Dem
 
 ## Testing and completion
 
-For ordinary Python changes run `pytest`. For client changes run `cargo fmt --check`, `cargo test` and `cargo build --release`.
+For ordinary Python changes run `pytest`. For client changes run `cargo fmt --check`, `cargo llvm-cov --ignore-filename-regex "main\.rs$" --fail-under-lines 100` and `cargo build --release`.
+
+`app/` is held at 100% statement coverage; `pytest` fails the run if coverage drops below that (`--cov-fail-under=100` in `pyproject.toml`). `client/src/protocol.rs` and `client/src/network.rs` are held at 100% line coverage the same way via `cargo-llvm-cov`; `client/src/main.rs` (cpal device/stream glue, `run()`, `main()`) is excluded from that gate since it has no mock backend for real audio hardware. New code needs tests in the same change, not a follow-up. A pre-commit hook (`pre-commit install`, config in `.pre-commit-config.yaml`) runs both coverage checks before each commit.
 
 A model stage is not complete merely because code imports. Record the exact evidence required by its model-specific document. When target GPU execution is unavailable in the development environment, state that limitation explicitly and provide a reproducible command for the owner to run.
 

@@ -104,47 +104,56 @@ async def get_runtime_settings() -> dict:
     return service.runtime_settings()
 
 
+_DEMUCS_FIELD_MAPPING = {
+    "model": "demucs_model",
+    "device": "demucs_device",
+    "segment_seconds": "demucs_segment_seconds",
+    "overlap": "demucs_overlap",
+    "shifts": "demucs_shifts",
+    "vocal_reduction": "demucs_vocal_reduction",
+}
+_CONVTASNET_FIELD_MAPPING = {
+    "model_path": "convtasnet_model_path",
+    "device": "convtasnet_device",
+    "segment_seconds": "convtasnet_segment_seconds",
+    "vocal_reduction": "convtasnet_vocal_reduction",
+    "vocal_source_index": "convtasnet_vocal_source_index",
+    "accompaniment_source_index": "convtasnet_accompaniment_source_index",
+}
+_MDX23C_FIELD_MAPPING = {
+    "device": "mdx23c_device",
+    "segment_seconds": "mdx23c_segment_seconds",
+    "overlap": "mdx23c_overlap",
+    "batch_size": "mdx23c_batch_size",
+    "vocal_reduction": "mdx23c_vocal_reduction",
+    "precision": "mdx23c_precision",
+}
+_CENTRE_REDUCTION_FIELD_MAPPING = {"reduction": "centre_reduction"}
+
+
+def _flatten_group(
+    updates: dict[str, object],
+    group_payload: BaseModel | None,
+    field_mapping: dict[str, str],
+    current: Settings,
+) -> None:
+    if group_payload is None:
+        return
+    for request_name, settings_name in field_mapping.items():
+        value = getattr(group_payload, request_name)
+        if value is not None and value != getattr(current, settings_name):
+            updates[settings_name] = value
+
+
 def _flatten_updates(payload: RuntimeSettingsUpdate) -> dict[str, object]:
     current = service.settings
     updates: dict[str, object] = {}
     if payload.processor is not None and payload.processor != current.processor:
         updates["processor"] = payload.processor
-    if payload.demucs is not None:
-        mapping = {
-            "model": "demucs_model",
-            "device": "demucs_device",
-            "segment_seconds": "demucs_segment_seconds",
-            "overlap": "demucs_overlap",
-            "shifts": "demucs_shifts",
-            "vocal_reduction": "demucs_vocal_reduction",
-        }
-        for request_name, settings_name in mapping.items():
-            value = getattr(payload.demucs, request_name)
-            if value is not None and value != getattr(current, settings_name):
-                updates[settings_name] = value
-    if payload.convtasnet is not None:
-        mapping = {
-            "model_path": "convtasnet_model_path",
-            "device": "convtasnet_device",
-            "segment_seconds": "convtasnet_segment_seconds",
-            "vocal_reduction": "convtasnet_vocal_reduction",
-            "vocal_source_index": "convtasnet_vocal_source_index",
-            "accompaniment_source_index": "convtasnet_accompaniment_source_index",
-        }
-        for request_name, settings_name in mapping.items():
-            value = getattr(payload.convtasnet, request_name)
-            if value is not None and value != getattr(current, settings_name):
-                updates[settings_name] = value
-    if payload.centre_reduction is not None:
-        value = payload.centre_reduction.reduction
-        if value is not None and value != current.centre_reduction:
-            updates["centre_reduction"] = value
-    if payload.mdx23c is not None:
-        for request_name in ("device", "segment_seconds", "overlap", "batch_size", "vocal_reduction", "precision"):
-            settings_name = f"mdx23c_{request_name}"
-            value = getattr(payload.mdx23c, request_name)
-            if value is not None and value != getattr(current, settings_name):
-                updates[settings_name] = value
+    _flatten_group(updates, payload.demucs, _DEMUCS_FIELD_MAPPING, current)
+    _flatten_group(updates, payload.convtasnet, _CONVTASNET_FIELD_MAPPING, current)
+    _flatten_group(updates, payload.mdx23c, _MDX23C_FIELD_MAPPING, current)
+    _flatten_group(updates, payload.centre_reduction, _CENTRE_REDUCTION_FIELD_MAPPING, current)
     return updates
 
 
