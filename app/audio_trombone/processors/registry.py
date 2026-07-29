@@ -3,11 +3,14 @@ from collections.abc import Callable
 from audio_trombone.config import Settings
 from audio_trombone.processors.base import AudioProcessor
 from audio_trombone.processors.centre_reduction import StereoCentreReductionProcessor
-from audio_trombone.processors.convtasnet_lyrics import ConvTasNetLyricsProcessor
+from audio_trombone.processors.convtasnet_lyrics import (
+    ConvTasNetLyricsConfig,
+    ConvTasNetLyricsProcessor,
+)
 from audio_trombone.processors.delay import DelayPassthroughProcessor
-from audio_trombone.processors.htdemucs import HTDemucsProcessor
+from audio_trombone.processors.htdemucs import HTDemucsConfig, HTDemucsProcessor
 from audio_trombone.processors.null import NullProcessor
-from audio_trombone.processors.mdx23c_vocals import MDX23CVocalsProcessor
+from audio_trombone.processors.mdx23c_vocals import MDX23CVocalsConfig, MDX23CVocalsProcessor
 from audio_trombone.processors.passthrough import PassthroughProcessor
 
 ProcessorFactory = Callable[[], AudioProcessor]
@@ -24,32 +27,38 @@ class ProcessorRegistry:
                 centre_reduction=settings.centre_reduction,
             ),
             "htdemucs-vocals": lambda: HTDemucsProcessor(
-                model_name=settings.demucs_model,
-                device=settings.demucs_device,
-                segment_seconds=settings.demucs_segment_seconds,
-                overlap=settings.demucs_overlap,
-                shifts=settings.demucs_shifts,
-                vocal_reduction=settings.demucs_vocal_reduction,
+                config=HTDemucsConfig(
+                    model_name=settings.demucs_model,
+                    device=settings.demucs_device,
+                    segment_seconds=settings.demucs_segment_seconds,
+                    overlap=settings.demucs_overlap,
+                    shifts=settings.demucs_shifts,
+                    vocal_reduction=settings.demucs_vocal_reduction,
+                ),
             ),
             "convtasnet-lyrics-causal": lambda: ConvTasNetLyricsProcessor(
-                model_path=settings.convtasnet_model_path,
-                device=settings.convtasnet_device,
-                segment_seconds=settings.convtasnet_segment_seconds,
-                vocal_reduction=settings.convtasnet_vocal_reduction,
-                vocal_source_index=settings.convtasnet_vocal_source_index,
-                accompaniment_source_index=(
-                    settings.convtasnet_accompaniment_source_index
+                config=ConvTasNetLyricsConfig(
+                    model_path=settings.convtasnet_model_path,
+                    device=settings.convtasnet_device,
+                    segment_seconds=settings.convtasnet_segment_seconds,
+                    vocal_reduction=settings.convtasnet_vocal_reduction,
+                    vocal_source_index=settings.convtasnet_vocal_source_index,
+                    accompaniment_source_index=(
+                        settings.convtasnet_accompaniment_source_index
+                    ),
                 ),
             ),
             "mdx23c-vocals": lambda: MDX23CVocalsProcessor(
-                config_path=settings.mdx23c_config_path,
-                checkpoint_path=settings.mdx23c_checkpoint_path,
-                device=settings.mdx23c_device,
-                segment_seconds=settings.mdx23c_segment_seconds,
-                overlap=settings.mdx23c_overlap,
-                batch_size=settings.mdx23c_batch_size,
-                vocal_reduction=settings.mdx23c_vocal_reduction,
-                precision=settings.mdx23c_precision,
+                config=MDX23CVocalsConfig(
+                    config_path=settings.mdx23c_config_path,
+                    checkpoint_path=settings.mdx23c_checkpoint_path,
+                    device=settings.mdx23c_device,
+                    segment_seconds=settings.mdx23c_segment_seconds,
+                    overlap=settings.mdx23c_overlap,
+                    batch_size=settings.mdx23c_batch_size,
+                    vocal_reduction=settings.mdx23c_vocal_reduction,
+                    precision=settings.mdx23c_precision,
+                ),
             ),
         }
 

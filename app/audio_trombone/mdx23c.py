@@ -4,19 +4,16 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
-from audio_trombone.tools.validate_mdx23c import (
-    DEFAULT_CHECKPOINT,
-    DEFAULT_CONFIG,
-    load_config,
-    normalise_state_dict,
-)
+from audio_trombone.mdx23c_model_yaml import DEFAULT_CONFIG, load_config
+from audio_trombone.tools.validate_mdx23c import DEFAULT_CHECKPOINT, normalise_state_dict
 
-_SUPPORTED_PRECISIONS = {"float32", "float16", "bfloat16"}
+MDX23CPrecision = Literal["float32", "float16", "bfloat16"]
+_SUPPORTED_PRECISIONS = set(get_args(MDX23CPrecision))
 
 
-def _resolve_device(requested_device: str, precision: str) -> str:
+def _resolve_device(requested_device: str, precision: MDX23CPrecision) -> str:
     """Applies the "auto" device default and the CUDA-only precision rule."""
     import torch
 
@@ -41,7 +38,7 @@ def _load_model(config: Any, checkpoint_path: Path, device: str) -> Any:
     return model.to(device).eval()
 
 
-def _autocast_context(precision: str):
+def _autocast_context(precision: MDX23CPrecision):
     import torch
 
     dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16}.get(precision)
@@ -96,7 +93,7 @@ class MDX23CAdapter:
         checkpoint_path: Path | str = DEFAULT_CHECKPOINT,
         *,
         device: str = "auto",
-        precision: str = "float32",
+        precision: MDX23CPrecision = "float32",
     ) -> None:
         if precision not in _SUPPORTED_PRECISIONS:
             raise ValueError("precision must be float32, float16, or bfloat16")

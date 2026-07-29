@@ -4,10 +4,12 @@ from array import array
 import asyncio
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 import time
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, get_args
 
 from audio_trombone.kany import KanyPacket, KanyProtocolError
+from audio_trombone.mdx23c import MDX23CPrecision
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities
 
@@ -21,41 +23,72 @@ def _raise_first_failure(checks: tuple[tuple[bool, str], ...]) -> None:
             raise ValueError(message)
 
 
+@dataclass(frozen=True)
+class MDX23CVocalsConfig:
+    """Tuning parameters for `MDX23CVocalsProcessor`, grouped into one object
+    so the constructor doesn't take an argument per field."""
+
+    config_path: str = "/models/mdx23c/model_2_stem_full_band_8k.yaml"
+    checkpoint_path: str = "/models/mdx23c/MDX23C-8KFFT-InstVoc_HQ.ckpt"
+    device: str = "auto"
+    segment_seconds: float = 1.0
+    overlap: float = 0.25
+    batch_size: int = 1
+    vocal_reduction: float = 1.0
+    precision: MDX23CPrecision = "float32"
+    warm_up: bool = False
+    max_buffered_segments: int = 3
+
+    def __post_init__(self) -> None:
+        _raise_first_failure((
+            (
+                self.segment_seconds in SUPPORTED_SEGMENTS,
+                f"segment_seconds must be one of {SUPPORTED_SEGMENTS}",
+            ),
+            (0 <= self.overlap < 0.5, "overlap must be between 0.0 and less than 0.5"),
+            (self.batch_size == 1, "batch_size must be 1 for paced interactive processing"),
+            (0 <= self.vocal_reduction <= 1, "vocal_reduction must be between 0.0 and 1.0"),
+            (
+                self.precision in get_args(MDX23CPrecision),
+                "precision must be float32, float16, or bfloat16",
+            ),
+        ))
+
+
 class MDX23CVocalsProcessor(AudioProcessor):
     name = "mdx23c-vocals"
     description = (
         "Finite-window, non-causal MDX23C instrumental/vocal reduction with "
         "bounded buffering and paced KANY output."
     )
-    capabilities = ProcessorCapabilities(False, True, True, True)
+    capabilities = ProcessorCapabilities(
+        passthrough=False,
+        stateful=True,
+        can_buffer=True,
+        changes_payload=True,
+    )
 
-    def __init__(self, *, config_path: str = "/models/mdx23c/model_2_stem_full_band_8k.yaml",
-                 checkpoint_path: str = "/models/mdx23c/MDX23C-8KFFT-InstVoc_HQ.ckpt",
-                 device: str = "auto", segment_seconds: float = 1.0,
-                 overlap: float = 0.25, batch_size: int = 1,
-                 vocal_reduction: float = 1.0, precision: str = "float32",
-                 warm_up: bool = False, max_buffered_segments: int = 3,
-                 inference_fn: InferenceFunction | None = None) -> None:
-        _raise_first_failure((
-            (
-                segment_seconds in SUPPORTED_SEGMENTS,
-                f"segment_seconds must be one of {SUPPORTED_SEGMENTS}",
-            ),
-            (0 <= overlap < 0.5, "overlap must be between 0.0 and less than 0.5"),
-            (batch_size == 1, "batch_size must be 1 for paced interactive processing"),
-            (0 <= vocal_reduction <= 1, "vocal_reduction must be between 0.0 and 1.0"),
-            (
-                precision in {"float32", "float16", "bfloat16"},
-                "precision must be float32, float16, or bfloat16",
-            ),
-        ))
-        self.config_path, self.checkpoint_path = config_path, checkpoint_path
-        self.requested_device, self.device = device, device
-        self.segment_seconds, self.overlap = segment_seconds, overlap
-        self.batch_size, self.vocal_reduction = batch_size, vocal_reduction
-        self.precision, self.warm_up = precision, warm_up
-        self.max_buffered_segments = max_buffered_segments
-        self._inference_fn, self._adapter = inference_fn, None
+    def __init__(
+        self,
+        *,
+        config: MDX23CVocalsConfig | None = None,
+        inference_fn: InferenceFunction | None = None,
+    ) -> None:
+        config = config or MDX23CVocalsConfig()
+        self.config_path = config.config_path
+        self.checkpoint_path = config.checkpoint_path
+        self.requested_device = config.device
+        self.device = config.device
+        self.segment_seconds = config.segment_seconds
+        self.overlap = config.overlap
+        self.batch_size = config.batch_size
+        self.vocal_reduction = config.vocal_reduction
+        self.precision = config.precision
+        self.warm_up = config.warm_up
+        self.max_buffered_segments = config.max_buffered_segments
+        self._inference_fn = inference_fn
+        self._adapter: Any | None = None
+
         self._input: deque[KanyPacket] = deque()
         self._input_frames = 0
         self._ready: deque[ProcessedPacket] = deque()
@@ -64,7 +97,10 @@ class MDX23CVocalsProcessor(AudioProcessor):
         self._rate: int | None = None
         self._channels: int | None = None
         self._previous_tail: array | None = None
-        self.segments_started = self.segments_completed = self.dropped_packets = 0
+
+        self.segments_started = 0
+        self.segments_completed = 0
+        self.dropped_packets = 0
         self.underruns = 0
         self.last_inference_seconds: float | None = None
         self.last_real_time_factor: float | None = None
@@ -74,29 +110,47 @@ class MDX23CVocalsProcessor(AudioProcessor):
     async def start(self) -> None:
         if self._inference_fn is None:
             from audio_trombone.mdx23c import MDX23CAdapter
+
             self._adapter = await asyncio.to_thread(
-                MDX23CAdapter, self.config_path, self.checkpoint_path,
-                device=self.requested_device, precision=self.precision)
+                MDX23CAdapter,
+                self.config_path,
+                self.checkpoint_path,
+                device=self.requested_device,
+                precision=self.precision,
+            )
             self.device = self._adapter.device
             self.model_loaded = True
             if self.warm_up:
                 import torch
+
                 frames = round(self._adapter.sample_rate * self.segment_seconds)
-                await asyncio.to_thread(self._adapter.infer, torch.zeros(1, 2, frames), self._adapter.sample_rate)
+                await asyncio.to_thread(
+                    self._adapter.infer, torch.zeros(1, 2, frames), self._adapter.sample_rate
+                )
         else:
             self.model_loaded = True
 
     async def stop(self) -> None:
-        await self.reset(); self._adapter = None; self.model_loaded = False
+        await self.reset()
+        self._adapter = None
+        self.model_loaded = False
 
     async def reset(self) -> None:
         if self._task:
             self._task.cancel()
-            try: await self._task
-            except (asyncio.CancelledError, Exception): pass
-        self._task = None; self._active.clear(); self._input.clear(); self._ready.clear()
-        self._input_frames = 0; self._rate = self._channels = None
-        self._previous_tail = None; self.last_error = None
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._task = None
+        self._active.clear()
+        self._input.clear()
+        self._ready.clear()
+        self._input_frames = 0
+        self._rate = None
+        self._channels = None
+        self._previous_tail = None
+        self.last_error = None
 
     @staticmethod
     def _decode_stereo_packet(payload: bytes) -> KanyPacket:
@@ -141,37 +195,75 @@ class MDX23CVocalsProcessor(AudioProcessor):
 
     async def flush(self) -> AsyncIterator[ProcessedPacket]:
         await self._harvest()
-        while self._ready: yield self._ready.popleft()
+        while self._ready:
+            yield self._ready.popleft()
 
     def _target_frames(self) -> int:
         assert self._rate is not None
         return round(self._rate * self.segment_seconds)
 
     def _launch(self) -> None:
-        packets, frames = [], 0
+        packets: list[KanyPacket] = []
+        frames = 0
         while self._input and frames < self._target_frames():
-            item = self._input.popleft(); packets.append(item); frames += item.frames; self._input_frames -= item.frames
-        samples = array("f"); [samples.extend(item.samples) for item in packets]
-        self._active = packets; self.segments_started += 1; started = time.perf_counter()
+            item = self._input.popleft()
+            packets.append(item)
+            frames += item.frames
+            self._input_frames -= item.frames
+
+        samples = array("f")
+        for item in packets:
+            samples.extend(item.samples)
+
+        self._active = packets
+        self.segments_started += 1
+        started = time.perf_counter()
+
         async def run() -> array:
             result = await asyncio.to_thread(self._run_inference, samples, packets[0].sample_rate, 2)
-            elapsed = time.perf_counter() - started; self.last_inference_seconds = elapsed
-            self.last_real_time_factor = elapsed / (frames / packets[0].sample_rate); return result
+            elapsed = time.perf_counter() - started
+            self.last_inference_seconds = elapsed
+            self.last_real_time_factor = elapsed / (frames / packets[0].sample_rate)
+            return result
+
         self._task = asyncio.create_task(run(), name=f"mdx23c-segment-{self.segments_started}")
 
     async def _harvest(self) -> None:
-        if self._task is None or not self._task.done(): return
+        if self._task is None or not self._task.done():
+            return
         task, self._task = self._task, None
-        try: output = await task
-        except Exception as exc: self._active.clear(); self.last_error = str(exc); raise RuntimeError(f"MDX23C inference failed: {exc}") from exc
+
+        output = await self._await_segment_result(task)
+        self._distribute_segment_output(output)
+        self._finish_segment()
+
+    async def _await_segment_result(self, task: "asyncio.Task[array]") -> array:
+        try:
+            return await task
+        except Exception as exc:
+            self._active.clear()
+            self.last_error = str(exc)
+            raise RuntimeError(f"MDX23C inference failed: {exc}") from exc
+
+    def _distribute_segment_output(self, output: array) -> None:
         expected = sum(p.frames * 2 for p in self._active)
-        if len(output) != expected: self._active.clear(); raise RuntimeError(f"MDX23C returned {len(output)} samples; expected {expected}")
+        if len(output) != expected:
+            self._active.clear()
+            raise RuntimeError(f"MDX23C returned {len(output)} samples; expected {expected}")
+
         self._crossfade(output)
         offset = 0
         for original in self._active:
             count = original.frames * 2
-            self._ready.append(ProcessedPacket(payload=original.encode_samples(array("f", output[offset:offset+count])))); offset += count
-        self._active.clear(); self.segments_completed += 1; self.last_error = None
+            self._ready.append(
+                ProcessedPacket(payload=original.encode_samples(array("f", output[offset : offset + count])))
+            )
+            offset += count
+
+    def _finish_segment(self) -> None:
+        self._active.clear()
+        self.segments_completed += 1
+        self.last_error = None
 
     def _crossfade(self, output: array) -> None:
         frames = len(output) // 2
@@ -182,35 +274,58 @@ class MDX23CVocalsProcessor(AudioProcessor):
                 alpha = (frame + 1) / (overlap_frames + 1)
                 for channel in range(2):
                     index = frame * 2 + channel
-                    output[index] = self._previous_tail[index] * (1-alpha) + output[index] * alpha
+                    output[index] = self._previous_tail[index] * (1 - alpha) + output[index] * alpha
         self._previous_tail = array("f", output[-samples:]) if samples else None
 
     def _run_inference(self, samples: array, sample_rate: int, channels: int) -> array:
-        if self._inference_fn: return self._inference_fn(samples, sample_rate, channels)
-        if self._adapter is None: raise RuntimeError("MDX23C model is not loaded")
-        import torch, torchaudio.functional as AF
+        if self._inference_fn:
+            return self._inference_fn(samples, sample_rate, channels)
+        if self._adapter is None:
+            raise RuntimeError("MDX23C model is not loaded")
+
+        import torch
+        import torchaudio.functional as audio_functional
+
         waveform = torch.tensor(samples).view(-1, 2).t().unsqueeze(0)
         original_frames = waveform.shape[-1]
-        if sample_rate != self._adapter.sample_rate: waveform = AF.resample(waveform, sample_rate, self._adapter.sample_rate)
+        if sample_rate != self._adapter.sample_rate:
+            waveform = audio_functional.resample(waveform, sample_rate, self._adapter.sample_rate)
+
         estimates = self._adapter.infer(waveform, self._adapter.sample_rate)
         instrumental = estimates[0, self._adapter.stem_index("instrumental", "other", "accompaniment")]
         original = waveform[0]
-        result = instrumental * self.vocal_reduction + original * (1-self.vocal_reduction)
-        if sample_rate != self._adapter.sample_rate: result = AF.resample(result, self._adapter.sample_rate, sample_rate)
-        result = torch.nn.functional.pad(result, (0, max(0, original_frames-result.shape[-1])))[:, :original_frames].clamp(-1, 1)
+        result = instrumental * self.vocal_reduction + original * (1 - self.vocal_reduction)
+        if sample_rate != self._adapter.sample_rate:
+            result = audio_functional.resample(result, self._adapter.sample_rate, sample_rate)
+
+        result = torch.nn.functional.pad(
+            result, (0, max(0, original_frames - result.shape[-1]))
+        )[:, :original_frames].clamp(-1, 1)
         return array("f", result.t().contiguous().cpu().view(-1).tolist())
 
     def diagnostics(self) -> dict[str, object]:
         rate = self._rate or 0
-        return {"device": self.device, "precision": self.precision, "model_loaded": self.model_loaded,
-                "segment_seconds": self.segment_seconds, "overlap": self.overlap, "batch_size": self.batch_size,
-                "vocal_reduction": self.vocal_reduction, "effective_input_buffering_seconds": self.segment_seconds,
-                "estimated_algorithmic_latency_seconds": self.segment_seconds,
-                "queued_input_seconds": self._input_frames/rate if rate else 0.0,
-                "queued_output_seconds": sum(len(p.payload)-28 for p in self._ready)/(rate*2*4) if rate else 0.0,
-                "buffered_input_packets": len(self._input), "ready_output_packets": len(self._ready),
-                "dropped_packets": self.dropped_packets, "underruns": self.underruns,
-                "inference_running": self._task is not None, "segments_started": self.segments_started,
-                "segments_completed": self.segments_completed, "last_inference_seconds": self.last_inference_seconds,
-                "last_real_time_factor": self.last_real_time_factor, "last_error": self.last_error,
-                "causal": False}
+        return {
+            "device": self.device,
+            "precision": self.precision,
+            "model_loaded": self.model_loaded,
+            "segment_seconds": self.segment_seconds,
+            "overlap": self.overlap,
+            "batch_size": self.batch_size,
+            "vocal_reduction": self.vocal_reduction,
+            "effective_input_buffering_seconds": self.segment_seconds,
+            "estimated_algorithmic_latency_seconds": self.segment_seconds,
+            "queued_input_seconds": self._input_frames / rate if rate else 0.0,
+            "queued_output_seconds": sum(len(p.payload) - 28 for p in self._ready) / (rate * 2 * 4) if rate else 0.0,
+            "buffered_input_packets": len(self._input),
+            "ready_output_packets": len(self._ready),
+            "dropped_packets": self.dropped_packets,
+            "underruns": self.underruns,
+            "inference_running": self._task is not None,
+            "segments_started": self.segments_started,
+            "segments_completed": self.segments_completed,
+            "last_inference_seconds": self.last_inference_seconds,
+            "last_real_time_factor": self.last_real_time_factor,
+            "last_error": self.last_error,
+            "causal": False,
+        }

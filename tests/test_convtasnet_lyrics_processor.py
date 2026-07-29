@@ -7,8 +7,18 @@ import torch
 
 from audio_trombone.kany import HEADER_SIZE, KanyPacket
 from audio_trombone.models import MediaPacket, ProcessedPacket
-from audio_trombone.processors.convtasnet_lyrics import ConvTasNetLyricsProcessor
+from audio_trombone.processors.convtasnet_lyrics import (
+    ConvTasNetLyricsConfig,
+    ConvTasNetLyricsProcessor,
+)
 from conftest import install_fake_torchaudio
+
+
+def make_processor(**kwargs) -> ConvTasNetLyricsProcessor:
+    inference_fn = kwargs.pop("inference_fn", None)
+    return ConvTasNetLyricsProcessor(
+        config=ConvTasNetLyricsConfig(**kwargs), inference_fn=inference_fn
+    )
 
 
 def make_media_packet(sequence: int, samples: list[float], sample_rate: int = 1_000) -> MediaPacket:
@@ -32,7 +42,7 @@ async def collect(processor: ConvTasNetLyricsProcessor, packet: MediaPacket):
 
 
 def test_vocal_reduction_is_reported_in_diagnostics() -> None:
-    processor = ConvTasNetLyricsProcessor(vocal_reduction=0.5, inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(vocal_reduction=0.5, inference_fn=lambda s, _r, _c: s)
 
     diagnostics = processor.diagnostics()
 
@@ -42,18 +52,18 @@ def test_vocal_reduction_is_reported_in_diagnostics() -> None:
 @pytest.mark.parametrize("value", [-0.01, 1.01])
 def test_vocal_reduction_must_be_between_zero_and_one(value: float) -> None:
     with pytest.raises(ValueError, match="vocal_reduction"):
-        ConvTasNetLyricsProcessor(vocal_reduction=value)
+        make_processor(vocal_reduction=value)
 
 
 def test_segment_seconds_must_be_positive() -> None:
     with pytest.raises(ValueError, match="segment_seconds"):
-        ConvTasNetLyricsProcessor(segment_seconds=0)
+        make_processor(segment_seconds=0)
 
 
 @pytest.mark.parametrize("kwargs", [{"vocal_source_index": -1}, {"accompaniment_source_index": -1}])
 def test_source_indexes_must_be_non_negative(kwargs: dict) -> None:
     with pytest.raises(ValueError, match="source indexes"):
-        ConvTasNetLyricsProcessor(**kwargs)
+        make_processor(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -63,7 +73,7 @@ async def test_buffers_inference_and_releases_one_packet_per_input() -> None:
         assert channels == 2
         return array("f", [0.0] * len(samples))
 
-    processor = ConvTasNetLyricsProcessor(
+    processor = make_processor(
         segment_seconds=0.004,
         inference_fn=remove_everything,
     )
@@ -94,7 +104,7 @@ async def test_buffers_inference_and_releases_one_packet_per_input() -> None:
 async def test_start_loads_model_when_no_inference_fn_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    processor = ConvTasNetLyricsProcessor()
+    processor = make_processor()
     calls = []
     monkeypatch.setattr(processor, "_load_model", lambda: calls.append(True))
 
@@ -105,7 +115,7 @@ async def test_start_loads_model_when_no_inference_fn_injected(
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_kany_payload() -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     packet = MediaPacket.received(b"not-a-kany-packet", "127.0.0.1", 40_000)
 
     with pytest.raises(ValueError, match="requires KANY v1 f32 PCM packets"):
@@ -114,7 +124,7 @@ async def test_process_rejects_non_kany_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_process_rejects_non_stereo_input() -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     header = bytearray(HEADER_SIZE)
     header[0:4] = b"KANY"
     header[4] = 1
@@ -133,7 +143,7 @@ async def test_process_rejects_non_stereo_input() -> None:
 
 @pytest.mark.asyncio
 async def test_flush_drains_ready_output() -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._ready_output.append(
         ProcessedPacket(payload=decoded.encode_samples(decoded.samples))
@@ -146,7 +156,7 @@ async def test_flush_drains_ready_output() -> None:
 
 
 def test_accept_stream_format_rejects_change_without_reset() -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     first = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._accept_stream_format(first)
 
@@ -157,14 +167,14 @@ def test_accept_stream_format_rejects_change_without_reset() -> None:
 
 
 def test_target_segment_frames_requires_known_stream_format() -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     with pytest.raises(RuntimeError, match="stream format is not known"):
         processor._target_segment_frames()
 
 
 @pytest.mark.asyncio
 async def test_harvest_inference_reraises_cancelled_error() -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -203,7 +213,7 @@ async def _wrong_length() -> array:
     ],
 )
 async def test_harvest_inference_wraps_failed_or_malformed_result(failing_task, match) -> None:
-    processor = ConvTasNetLyricsProcessor(inference_fn=lambda s, _r, _c: s)
+    processor = make_processor(inference_fn=lambda s, _r, _c: s)
     decoded = KanyPacket.decode(make_media_packet(0, [0.1, 0.2, 0.3, 0.4]).payload)
     processor._active_packets = [decoded]
 
@@ -219,7 +229,7 @@ async def test_harvest_inference_wraps_failed_or_malformed_result(failing_task, 
 
 def test_load_model_raises_when_dependencies_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "audio_trombone.vendor.clarity_tasnet", None)
-    processor = ConvTasNetLyricsProcessor()
+    processor = make_processor()
 
     with pytest.raises(RuntimeError, match="ConvTasNet dependencies are not installed"):
         processor._load_model()
@@ -240,7 +250,7 @@ def test_load_model_auto_selects_cpu_when_no_gpu(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
     )
-    processor = ConvTasNetLyricsProcessor(device="auto")
+    processor = make_processor(device="auto")
 
     processor._load_model()
 
@@ -255,7 +265,7 @@ def test_load_model_honours_explicit_cpu_device(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
     )
-    processor = ConvTasNetLyricsProcessor(device="cpu")
+    processor = make_processor(device="cpu")
 
     processor._load_model()
 
@@ -269,14 +279,14 @@ def test_load_model_rejects_cuda_when_unavailable(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         ConvTasNetStereo, "from_pretrained", classmethod(lambda cls, *a, **k: _tiny_model())
     )
-    processor = ConvTasNetLyricsProcessor(device="cuda")
+    processor = make_processor(device="cuda")
 
     with pytest.raises(RuntimeError, match="cannot see a GPU"):
         processor._load_model()
 
 
 def test_run_inference_without_model_raises() -> None:
-    processor = ConvTasNetLyricsProcessor()
+    processor = make_processor()
     with pytest.raises(RuntimeError, match="ConvTasNet model is not loaded"):
         processor._run_inference(array("f", [0.0, 0.0]), 1_000, 2)
 
@@ -294,7 +304,7 @@ def _stub_model(shape_fn):
 
 
 def _processor_with_stub_model(shape_fn, **kwargs) -> ConvTasNetLyricsProcessor:
-    processor = ConvTasNetLyricsProcessor(**kwargs)
+    processor = make_processor(**kwargs)
     processor._model = _stub_model(shape_fn)
     processor._model_sample_rate = 1_000
     processor._device = "cpu"
