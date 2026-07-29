@@ -177,8 +177,8 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
         waveform = torch.tensor(samples, dtype=torch.float32)
         return waveform.view(-1, channels).transpose(0, 1).contiguous()
 
-    def _reduce_vocals(self, waveform: Any, sample_rate: int) -> Any:
-        original, stems = self._separator.separate_tensor(waveform, sr=sample_rate)
+    def _reduce_vocals(self, separator: Any, waveform: Any, sample_rate: int) -> Any:
+        original, stems = separator.separate_tensor(waveform, sr=sample_rate)
         vocals = stems.get("vocals")
         if vocals is None:
             raise RuntimeError("Demucs model did not return a vocals stem")
@@ -188,12 +188,12 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
         return original - (vocals * self.vocal_reduction)
 
     def _finalize_output(
-        self, output: Any, sample_rate: int, target_frames: int
+        self, separator: Any, output: Any, sample_rate: int, target_frames: int
     ) -> Any:
         import torch
         import torchaudio.functional as audio_functional
 
-        model_rate = int(self._separator.samplerate)
+        model_rate = int(separator.samplerate)
         if model_rate != sample_rate:
             output = audio_functional.resample(output, model_rate, sample_rate)
 
@@ -212,7 +212,8 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
     def _run_inference(self, samples: array, sample_rate: int, channels: int) -> array:
         if self._inference_fn is not None:
             return self._inference_fn(samples, sample_rate, channels)
-        if self._separator is None:
+        separator = self._separator
+        if separator is None:
             raise RuntimeError("Demucs separator is not loaded")
 
         import torch
@@ -220,7 +221,9 @@ class HTDemucsProcessor(SegmentedInferenceProcessor):
         waveform = self._to_channel_first_waveform(samples, channels)
         target_frames = len(samples) // channels
         with torch.inference_mode():
-            output = self._reduce_vocals(waveform, sample_rate)
-            interleaved = self._finalize_output(output, sample_rate, target_frames)
+            output = self._reduce_vocals(separator, waveform, sample_rate)
+            interleaved = self._finalize_output(
+                separator, output, sample_rate, target_frames
+            )
 
         return array("f", interleaved.tolist())

@@ -1,6 +1,8 @@
 from collections.abc import Callable
+from typing import cast
 
 from audio_trombone.config import Settings
+from audio_trombone.mdx23c import MDX23CPrecision
 from audio_trombone.processors.base import AudioProcessor
 from audio_trombone.processors.centre_reduction import StereoCentreReductionProcessor
 from audio_trombone.processors.convtasnet_lyrics import (
@@ -60,7 +62,11 @@ class ProcessorRegistry:
                     overlap=settings.mdx23c_overlap,
                     batch_size=settings.mdx23c_batch_size,
                     vocal_reduction=settings.mdx23c_vocal_reduction,
-                    precision=settings.mdx23c_precision,
+                    # Settings.mdx23c_precision is a plain str (it comes from
+                    # an env var, never statically known to match the
+                    # Literal); MDX23CVocalsConfig.__post_init__ validates
+                    # it at runtime regardless.
+                    precision=cast(MDX23CPrecision, settings.mdx23c_precision),
                 ),
             ),
         }

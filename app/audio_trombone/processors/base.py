@@ -33,7 +33,11 @@ class AudioProcessor(ABC):
         return {}
 
     @abstractmethod
-    async def process(self, packet: MediaPacket) -> AsyncIterator[ProcessedPacket]:
+    def process(self, packet: MediaPacket) -> AsyncIterator[ProcessedPacket]:
+        # Not `async def`: every real implementation is an async generator
+        # (uses `yield`), which calling code iterates directly with
+        # `async for` rather than awaiting first. A coroutine-shaped
+        # declaration here would mismatch every override's actual type.
         raise NotImplementedError
 
     async def flush(self) -> AsyncIterator[ProcessedPacket]:

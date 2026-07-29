@@ -21,6 +21,12 @@ repos:
         entry: ruff check
         language: system
         types: [python]
+      - id: mypy
+        name: mypy (Python type checking)
+        entry: mypy
+        language: system
+        pass_filenames: false
+        types: [python]
       - id: cargo-fmt
         name: cargo fmt (Rust)
         entry: cargo fmt --manifest-path client/Cargo.toml --check

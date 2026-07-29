@@ -69,6 +69,23 @@ async def test_exact_frames_bounded_buffer_and_reset():
     assert processor._previous_tail is None
 
 
+def test_crossfade_skips_blending_when_previous_tail_is_too_short():
+    # Simulates `overlap` growing between segments (e.g. via /api/settings):
+    # the previous segment's tail was sized for the old, smaller overlap, so
+    # it's now shorter than this segment needs and must be skipped rather
+    # than indexed out of range.
+    processor = make_processor(
+        segment_seconds=0.25, overlap=0.25, inference_fn=lambda s, r, c: s
+    )
+    processor._previous_tail = array("f", [0.0])
+    output = array("f", [1.0] * 8)
+
+    processor._crossfade(output)
+
+    assert list(output) == [1.0] * 8
+    assert processor._previous_tail is not None
+
+
 def test_overlap_crossfade():
     processor = make_processor(
         segment_seconds=0.25, overlap=0.25, inference_fn=lambda s, r, c: s

@@ -181,7 +181,10 @@ class TromboneService:
         if unknown:
             raise ValueError(f"Unknown runtime settings: {', '.join(sorted(unknown))}")
 
-        candidate = replace(self.settings, **updates)
+        # updates is a dynamic dict[str, object] by design -- it mirrors a
+        # JSON PATCH body, so mypy can't match it against Settings' per-field
+        # types here. _validate_runtime_settings below is the real check.
+        candidate = replace(self.settings, **updates)  # type: ignore[arg-type]
         self._validate_runtime_settings(candidate)
 
         rule = self._find_live_apply_rule(updates)

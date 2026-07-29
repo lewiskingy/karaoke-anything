@@ -4,6 +4,8 @@ pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 pre-commit==4.6.1
 ruff==0.16.0
+mypy==2.3.0
+types-PyYAML==6.0.12.20260724
 httpx==0.28.1
 huggingface-hub==0.34.4
 numpy==2.1.3

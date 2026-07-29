@@ -179,8 +179,8 @@ class ConvTasNetLyricsProcessor(SegmentedInferenceProcessor):
             )
         return waveform.to(self._device)
 
-    def _separate_accompaniment(self, waveform: Any) -> Any:
-        estimates = self._model(waveform)
+    def _separate_accompaniment(self, model: Any, waveform: Any) -> Any:
+        estimates = model(waveform)
         if estimates.ndim != 4:
             raise RuntimeError(
                 "Expected ConvTasNet output [batch, sources, channels, frames], "
@@ -227,7 +227,8 @@ class ConvTasNetLyricsProcessor(SegmentedInferenceProcessor):
     def _run_inference(self, samples: array, sample_rate: int, channels: int) -> array:
         if self._inference_fn is not None:
             return self._inference_fn(samples, sample_rate, channels)
-        if self._model is None:
+        model = self._model
+        if model is None:
             raise RuntimeError("ConvTasNet model is not loaded")
 
         import torch
@@ -235,7 +236,7 @@ class ConvTasNetLyricsProcessor(SegmentedInferenceProcessor):
         waveform = self._prepare_waveform(samples, sample_rate, channels)
         target_frames = len(samples) // channels
         with torch.inference_mode():
-            output = self._separate_accompaniment(waveform)
+            output = self._separate_accompaniment(model, waveform)
             interleaved = self._finalize_output(output, sample_rate, target_frames)
 
         return array("f", interleaved.tolist())

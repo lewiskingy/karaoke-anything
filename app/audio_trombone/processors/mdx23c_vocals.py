@@ -132,23 +132,24 @@ class MDX23CVocalsProcessor(AudioProcessor):
         if self._inference_fn is None:
             from audio_trombone.mdx23c import MDX23CAdapter
 
-            self._adapter = await asyncio.to_thread(
+            adapter = await asyncio.to_thread(
                 MDX23CAdapter,
                 self.config_path,
                 self.checkpoint_path,
                 device=self.requested_device,
                 precision=self.precision,
             )
-            self.device = self._adapter.device
+            self._adapter = adapter
+            self.device = adapter.device
             self.model_loaded = True
             if self.warm_up:
                 import torch
 
-                frames = round(self._adapter.sample_rate * self.segment_seconds)
+                frames = round(adapter.sample_rate * self.segment_seconds)
                 await asyncio.to_thread(
-                    self._adapter.infer,
+                    adapter.infer,
                     torch.zeros(1, 2, frames),
-                    self._adapter.sample_rate,
+                    adapter.sample_rate,
                 )
         else:
             self.model_loaded = True
@@ -312,28 +313,28 @@ class MDX23CVocalsProcessor(AudioProcessor):
         self.segments_completed += 1
         self.last_error = None
 
-    def _has_usable_tail(self, samples: int) -> bool:
+    def _usable_tail(self, samples: int) -> array | None:
         # `_previous_tail` was sized by the *previous* segment's `overlap`;
         # since `overlap` can change at runtime (via /api/settings) between
         # segments, guard against it now covering less than this segment wants.
-        return (
-            samples > 0
-            and self._previous_tail is not None
-            and len(self._previous_tail) >= samples
-        )
+        tail = self._previous_tail
+        if samples <= 0 or tail is None:
+            return None
+        if len(tail) < samples:
+            return None
+        return tail
 
     def _crossfade(self, output: array) -> None:
         frames = len(output) // 2
         overlap_frames = min(round(frames * self.overlap), frames // 2)
         samples = overlap_frames * 2
-        if self._has_usable_tail(samples):
+        tail = self._usable_tail(samples)
+        if tail is not None:
             for frame in range(overlap_frames):
                 alpha = (frame + 1) / (overlap_frames + 1)
                 for channel in range(2):
                     index = frame * 2 + channel
-                    output[index] = (
-                        self._previous_tail[index] * (1 - alpha) + output[index] * alpha
-                    )
+                    output[index] = tail[index] * (1 - alpha) + output[index] * alpha
         self._previous_tail = array("f", output[-samples:]) if samples else None
 
     def _run_inference(self, samples: array, sample_rate: int, channels: int) -> array:
