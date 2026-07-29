@@ -36,12 +36,18 @@ RUN apt-get update \
 # builds it from source via maturin/pyo3, which auto-installs its own Rust
 # toolchain but still needs a system C linker for the final link step.
 
+# torch/torchaudio capped at 2.11.0: PyTorch stopped publishing cu128 wheels
+# past that version (2.12+ moved to newer CUDA build targets), and this image
+# is pinned to the cu128 CUDA 12.8 base. 2.11.0 fixes 7 of 8 known torch CVEs
+# current at the time of writing; the remaining one (PYSEC-2025-194, fixed in
+# 2.13.0) needs a CUDA base image bump to resolve -- a separate decision from
+# a routine dependency bump.
 COPY requirements.txt requirements-demucs.txt ./
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt \
     && python3 -m pip install --break-system-packages --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu128 \
-        torch==2.7.1 \
-        torchaudio==2.7.1 \
+        torch==2.11.0 \
+        torchaudio==2.11.0 \
     && python3 -m pip install --break-system-packages --no-cache-dir -r requirements-demucs.txt
 
 RUN mkdir -p /models/torch /models/convtasnet-lyrics-causal /models/mdx23c \

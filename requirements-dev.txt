@@ -1,6 +1,6 @@
 -r requirements.txt
-pytest==8.4.1
-pytest-asyncio==1.1.0
+pytest==9.0.3
+pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 pre-commit==4.6.1
 ruff==0.16.0
@@ -12,4 +12,4 @@ numpy==2.1.3
 # the vendored/GPU-image model code, never real inference, so it doesn't need
 # the CUDA runtime the default PyPI wheel bundles.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1
+torch==2.13.0
