@@ -1,10 +1,12 @@
+mod device;
+mod device_selection;
 mod network;
 mod protocol;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, StreamConfig, SupportedStreamConfigRange};
+use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::{Device, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
@@ -15,6 +17,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
+use device::{list_devices, negotiate_devices, DeviceSetup};
 use network::{receiver_loop, sender_loop, AudioFormat, ReceiverConfig, SenderConfig};
 
 #[derive(Parser, Debug)]
@@ -79,63 +82,6 @@ fn main() -> Result<()> {
     }
 
     run(host, cli)
-}
-
-/// Devices and negotiated stream configs, matched in sample rate and channel count.
-struct DeviceSetup {
-    input_device: Device,
-    output_device: Device,
-    input_config: StreamConfig,
-    output_config: StreamConfig,
-}
-
-fn negotiate_devices(host: &cpal::Host, cli: &Cli) -> Result<DeviceSetup> {
-    let input_device = select_device(
-        host.input_devices()
-            .context("failed to enumerate input devices")?,
-        cli.capture.as_deref(),
-        host.default_input_device(),
-        "input",
-    )?;
-    let output_device = select_device(
-        host.output_devices()
-            .context("failed to enumerate output devices")?,
-        cli.playback.as_deref(),
-        host.default_output_device(),
-        "output",
-    )?;
-
-    let input_config = choose_config(
-        &input_device,
-        Direction::Input,
-        cli.sample_rate,
-        cli.channels,
-    )?;
-    let output_config = choose_config(
-        &output_device,
-        Direction::Output,
-        input_config.sample_rate.0,
-        input_config.channels,
-    )?;
-
-    if input_config.sample_rate != output_config.sample_rate
-        || input_config.channels != output_config.channels
-    {
-        bail!(
-            "capture and playback formats must match in this prototype: input={}Hz/{}ch, output={}Hz/{}ch",
-            input_config.sample_rate.0,
-            input_config.channels,
-            output_config.sample_rate.0,
-            output_config.channels
-        );
-    }
-
-    Ok(DeviceSetup {
-        input_device,
-        output_device,
-        input_config,
-        output_config,
-    })
 }
 
 /// Frame/sample counts derived from the negotiated format and CLI durations.
@@ -360,152 +306,6 @@ fn run(host: cpal::Host, cli: Cli) -> Result<()> {
         start_streams(&devices, packet_tx, playback_queue, &sizing)?;
 
     stream_until_stopped(&running, capture_stream, playback_stream, threads)
-}
-
-fn list_devices(host: &cpal::Host) -> Result<()> {
-    println!("Input devices:");
-    for device in host
-        .input_devices()
-        .context("failed to enumerate input devices")?
-    {
-        println!("  {}", device.name().unwrap_or_else(|_| "<unknown>".into()));
-    }
-
-    println!("\nOutput devices:");
-    for device in host
-        .output_devices()
-        .context("failed to enumerate output devices")?
-    {
-        println!("  {}", device.name().unwrap_or_else(|_| "<unknown>".into()));
-    }
-    Ok(())
-}
-
-fn select_device<I>(
-    devices: I,
-    needle: Option<&str>,
-    default: Option<Device>,
-    kind: &str,
-) -> Result<Device>
-where
-    I: Iterator<Item = Device>,
-{
-    if let Some(needle) = needle {
-        let needle = needle.to_lowercase();
-        let mut matches = Vec::new();
-        for device in devices {
-            let name = device.name().unwrap_or_else(|_| "<unknown>".into());
-            if name.to_lowercase().contains(&needle) {
-                matches.push((name, device));
-            }
-        }
-
-        return match matches.len() {
-            0 => bail!("no {kind} device contains '{needle}'"),
-            1 => Ok(matches.remove(0).1),
-            _ => {
-                let names = matches
-                    .into_iter()
-                    .map(|(name, _)| name)
-                    .collect::<Vec<_>>();
-                bail!("{kind} device selector is ambiguous: {}", names.join(", "))
-            }
-        };
-    }
-
-    default.ok_or_else(|| anyhow!("no default {kind} device is available"))
-}
-
-fn config_matches(
-    range: &SupportedStreamConfigRange,
-    preferred_rate: u32,
-    preferred_channels: u16,
-) -> bool {
-    let rate_in_range =
-        range.min_sample_rate().0 <= preferred_rate && range.max_sample_rate().0 >= preferred_rate;
-    range.sample_format() == SampleFormat::F32
-        && range.channels() == preferred_channels
-        && rate_in_range
-}
-
-fn find_matching_config(
-    mut ranges: impl Iterator<Item = SupportedStreamConfigRange>,
-    preferred_rate: u32,
-    preferred_channels: u16,
-) -> Option<StreamConfig> {
-    ranges
-        .find(|range| config_matches(range, preferred_rate, preferred_channels))
-        .map(|range| {
-            range
-                .with_sample_rate(cpal::SampleRate(preferred_rate))
-                .config()
-        })
-}
-
-#[derive(Clone, Copy)]
-enum Direction {
-    Input,
-    Output,
-}
-
-impl Direction {
-    fn label(self) -> &'static str {
-        match self {
-            Direction::Input => "input",
-            Direction::Output => "output",
-        }
-    }
-
-    /// cpal exposes separate, differently-typed iterators for input vs.
-    /// output configs, so this still boxes to unify them into one return type.
-    fn supported_configs(
-        self,
-        device: &Device,
-    ) -> Result<
-        Box<dyn Iterator<Item = SupportedStreamConfigRange>>,
-        cpal::SupportedStreamConfigsError,
-    > {
-        match self {
-            Direction::Input => Ok(Box::new(device.supported_input_configs()?)),
-            Direction::Output => Ok(Box::new(device.supported_output_configs()?)),
-        }
-    }
-
-    fn default_config(
-        self,
-        device: &Device,
-    ) -> Result<cpal::SupportedStreamConfig, cpal::DefaultStreamConfigError> {
-        match self {
-            Direction::Input => device.default_input_config(),
-            Direction::Output => device.default_output_config(),
-        }
-    }
-}
-
-/// Picks a device's stream config, preferring an exact match for
-/// `preferred_rate`/`preferred_channels` and falling back to the device
-/// default (if it's f32) otherwise.
-fn choose_config(
-    device: &Device,
-    direction: Direction,
-    preferred_rate: u32,
-    preferred_channels: u16,
-) -> Result<StreamConfig> {
-    let kind = direction.label();
-    let ranges = direction
-        .supported_configs(device)
-        .with_context(|| format!("failed to read {kind} configurations"))?;
-    if let Some(config) = find_matching_config(ranges, preferred_rate, preferred_channels) {
-        return Ok(config);
-    }
-
-    let default = direction
-        .default_config(device)
-        .with_context(|| format!("no default {kind} configuration"))?;
-    if default.sample_format() != SampleFormat::F32 {
-        bail!("prototype currently requires an f32 {kind} device configuration");
-    }
-    Ok(default.config())
 }
 
 fn build_input_stream(
