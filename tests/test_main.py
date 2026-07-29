@@ -247,7 +247,7 @@ def test_flatten_updates_only_includes_changed_fields(load_main) -> None:
         centre_reduction=main_module.CentreReductionSettingsUpdate(reduction=0.7),
     )
 
-    updates = main_module._flatten_updates(payload)
+    updates = main_module._flatten_updates(payload, main_module.service.settings)
 
     assert updates == {}
 
@@ -261,7 +261,7 @@ def test_flatten_updates_reports_changed_fields(load_main) -> None:
         centre_reduction=main_module.CentreReductionSettingsUpdate(reduction=0.2),
     )
 
-    updates = main_module._flatten_updates(payload)
+    updates = main_module._flatten_updates(payload, main_module.service.settings)
 
     assert updates == {
         "processor": "null",

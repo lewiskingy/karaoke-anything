@@ -1,9 +1,25 @@
 use anyhow::{bail, Result};
 
+// KANY packet layout (big-endian header, little-endian f32 samples):
+//   0..4   magic ("KANY")
+//   4      version
+//   5      reserved
+//   6      channels
+//   7      sample_format
+//   8..12  sample_rate
+//   12..16 sequence
+//   16..24 timestamp_us
+//   24..26 frames
+//   26..28 reserved
+//   28..   samples (f32, little-endian, interleaved)
+// Mirrored independently in app/audio_trombone/kany.py -- a layout change
+// needs both files updated to match.
 pub const MAGIC: &[u8; 4] = b"KANY";
 pub const VERSION: u8 = 1;
 pub const HEADER_SIZE: usize = 28;
 pub const SAMPLE_FORMAT_F32_LE: u8 = 1;
+const RESERVED_BYTE: u8 = 0;
+const RESERVED_TRAILER: u16 = 0;
 
 #[derive(Debug)]
 pub struct AudioPacket {
@@ -36,14 +52,14 @@ pub fn encode_packet(packet: &AudioPacket) -> Result<Vec<u8>> {
     let mut output = Vec::with_capacity(HEADER_SIZE + packet.samples.len() * 4);
     output.extend_from_slice(MAGIC);
     output.push(VERSION);
-    output.push(0);
+    output.push(RESERVED_BYTE);
     output.push(packet.channels as u8);
     output.push(SAMPLE_FORMAT_F32_LE);
     output.extend_from_slice(&packet.sample_rate.to_be_bytes());
     output.extend_from_slice(&packet.sequence.to_be_bytes());
     output.extend_from_slice(&packet.timestamp_us.to_be_bytes());
     output.extend_from_slice(&packet.frames.to_be_bytes());
-    output.extend_from_slice(&0u16.to_be_bytes());
+    output.extend_from_slice(&RESERVED_TRAILER.to_be_bytes());
     for sample in &packet.samples {
         output.extend_from_slice(&sample.to_le_bytes());
     }

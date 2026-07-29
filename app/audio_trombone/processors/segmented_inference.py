@@ -6,6 +6,12 @@ one processed packet per subsequent input packet so playback stays paced
 rather than bursting an entire segment at once. That buffering, launching,
 and harvesting logic is identical between them; only KANY-decode error text,
 model loading, and the inference call itself differ per model.
+
+`MDX23CVocalsProcessor` (processors/mdx23c_vocals.py) implements the same
+buffer/launch/harvest shape independently rather than inheriting from this
+class, because it also crossfades between segments and drops the oldest
+buffered input when overfull -- neither of which this base class supports.
+A change here to segment bookkeeping is likely needed there too.
 """
 
 from array import array

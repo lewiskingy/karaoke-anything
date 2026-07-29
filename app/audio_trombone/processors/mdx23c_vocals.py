@@ -62,6 +62,13 @@ class MDX23CVocalsConfig:
 
 
 class MDX23CVocalsProcessor(AudioProcessor):
+    """Deliberately does not extend `SegmentedInferenceProcessor`, even though
+    its packet-buffering and segment-harvest machinery mirrors that base
+    class closely: this processor also does crossfading and drops the
+    oldest buffered input once `max_buffered_segments` is exceeded, neither
+    of which the base class supports. A bug in segment bookkeeping likely
+    applies to both -- check `segmented_inference.py` too."""
+
     name = "mdx23c-vocals"
     description = (
         "Finite-window, non-causal MDX23C instrumental/vocal reduction with "
@@ -279,11 +286,21 @@ class MDX23CVocalsProcessor(AudioProcessor):
         self.segments_completed += 1
         self.last_error = None
 
+    def _has_usable_tail(self, samples: int) -> bool:
+        # `_previous_tail` was sized by the *previous* segment's `overlap`;
+        # since `overlap` can change at runtime (via /api/settings) between
+        # segments, guard against it now covering less than this segment wants.
+        return (
+            samples > 0
+            and self._previous_tail is not None
+            and len(self._previous_tail) >= samples
+        )
+
     def _crossfade(self, output: array) -> None:
         frames = len(output) // 2
         overlap_frames = min(round(frames * self.overlap), frames // 2)
         samples = overlap_frames * 2
-        if samples and self._previous_tail is not None:
+        if self._has_usable_tail(samples):
             for frame in range(overlap_frames):
                 alpha = (frame + 1) / (overlap_frames + 1)
                 for channel in range(2):

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from audio_trombone.config import Settings
-from audio_trombone.service import TromboneService
+from audio_trombone.service import RUNTIME_SETTING_GROUPS, TromboneService
 
 
 logging.basicConfig(
@@ -104,33 +104,6 @@ async def get_runtime_settings() -> dict:
     return service.runtime_settings()
 
 
-_DEMUCS_FIELD_MAPPING = {
-    "model": "demucs_model",
-    "device": "demucs_device",
-    "segment_seconds": "demucs_segment_seconds",
-    "overlap": "demucs_overlap",
-    "shifts": "demucs_shifts",
-    "vocal_reduction": "demucs_vocal_reduction",
-}
-_CONVTASNET_FIELD_MAPPING = {
-    "model_path": "convtasnet_model_path",
-    "device": "convtasnet_device",
-    "segment_seconds": "convtasnet_segment_seconds",
-    "vocal_reduction": "convtasnet_vocal_reduction",
-    "vocal_source_index": "convtasnet_vocal_source_index",
-    "accompaniment_source_index": "convtasnet_accompaniment_source_index",
-}
-_MDX23C_FIELD_MAPPING = {
-    "device": "mdx23c_device",
-    "segment_seconds": "mdx23c_segment_seconds",
-    "overlap": "mdx23c_overlap",
-    "batch_size": "mdx23c_batch_size",
-    "vocal_reduction": "mdx23c_vocal_reduction",
-    "precision": "mdx23c_precision",
-}
-_CENTRE_REDUCTION_FIELD_MAPPING = {"reduction": "centre_reduction"}
-
-
 def _flatten_group(
     updates: dict[str, object],
     group_payload: BaseModel | None,
@@ -145,20 +118,21 @@ def _flatten_group(
             updates[settings_name] = value
 
 
-def _flatten_updates(payload: RuntimeSettingsUpdate) -> dict[str, object]:
-    current = service.settings
+def _flatten_updates(payload: RuntimeSettingsUpdate, current: Settings) -> dict[str, object]:
     updates: dict[str, object] = {}
     if payload.processor is not None and payload.processor != current.processor:
         updates["processor"] = payload.processor
-    _flatten_group(updates, payload.demucs, _DEMUCS_FIELD_MAPPING, current)
-    _flatten_group(updates, payload.convtasnet, _CONVTASNET_FIELD_MAPPING, current)
-    _flatten_group(updates, payload.mdx23c, _MDX23C_FIELD_MAPPING, current)
-    _flatten_group(updates, payload.centre_reduction, _CENTRE_REDUCTION_FIELD_MAPPING, current)
+    _flatten_group(updates, payload.demucs, RUNTIME_SETTING_GROUPS["demucs"], current)
+    _flatten_group(updates, payload.convtasnet, RUNTIME_SETTING_GROUPS["convtasnet"], current)
+    _flatten_group(updates, payload.mdx23c, RUNTIME_SETTING_GROUPS["mdx23c"], current)
+    _flatten_group(
+        updates, payload.centre_reduction, RUNTIME_SETTING_GROUPS["centre_reduction"], current
+    )
     return updates
 
 
 async def _apply_settings(payload: RuntimeSettingsUpdate) -> dict:
-    updates = _flatten_updates(payload)
+    updates = _flatten_updates(payload, service.settings)
     if not updates:
         return {
             "status": "unchanged",

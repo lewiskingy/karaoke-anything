@@ -15,5 +15,7 @@ class NullProcessor(AudioProcessor):
     )
 
     async def process(self, packet: MediaPacket) -> AsyncIterator[ProcessedPacket]:
+        # `yield` in an unreachable branch makes this an async generator
+        # that produces nothing -- this processor discards every packet.
         if False:
             yield ProcessedPacket(payload=packet.payload)

@@ -2,6 +2,20 @@ from array import array
 from dataclasses import dataclass
 import sys
 
+# KANY packet layout (big-endian header, little-endian f32 samples):
+#   0..4   magic ("KANY")
+#   4      version
+#   5      reserved
+#   6      channels
+#   7      sample_format
+#   8..12  sample_rate
+#   12..16 sequence
+#   16..24 timestamp_us
+#   24..26 frames
+#   26..28 reserved
+#   28..   samples (f32, little-endian, interleaved)
+# Mirrored independently in client/src/protocol.rs -- a layout change needs
+# both files updated to match.
 MAGIC = b"KANY"
 VERSION = 1
 HEADER_SIZE = 28

@@ -45,6 +45,8 @@ class BufferedFakeProcessor(AudioProcessor):
         self._outputs = outputs
 
     async def process(self, packet: MediaPacket):
+        # `yield` in an unreachable branch makes this an async generator
+        # that produces nothing; this processor only emits via flush().
         if False:
             yield ProcessedPacket(payload=b"")
 
@@ -338,7 +340,7 @@ def test_send_output_uses_output_destination_when_provided() -> None:
     service.transport = RecordingTransport()
     processed = ProcessedPacket(payload=b"y", destination_host="1.2.3.4", destination_port=7000)
 
-    service._send_output(make_packet(host="192.168.1.5"), processed)
+    service._send_output(processed, fallback_host="192.168.1.5")
 
     assert service.transport.sent == [(b"y", ("1.2.3.4", 7000))]
     assert service.metrics.packets_forwarded == 1
@@ -350,7 +352,7 @@ def test_send_output_falls_back_to_return_host_and_output_port() -> None:
     service.transport = RecordingTransport()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(host="192.168.1.5"), processed)
+    service._send_output(processed, fallback_host="192.168.1.5")
 
     assert service.transport.sent == [(b"y", ("10.0.0.1", 6000))]
 
@@ -360,7 +362,7 @@ def test_send_output_falls_back_to_sender_host_when_no_return_host() -> None:
     service.transport = RecordingTransport()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(host="192.168.1.5"), processed)
+    service._send_output(processed, fallback_host="192.168.1.5")
 
     assert service.transport.sent == [(b"y", ("192.168.1.5", 6000))]
 
@@ -369,7 +371,7 @@ def test_send_output_records_error_when_transport_missing() -> None:
     service = make_service()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(), processed)
+    service._send_output(processed, fallback_host="127.0.0.1")
 
     assert service.metrics.forwarding_errors == 1
 
@@ -379,7 +381,7 @@ def test_send_output_records_error_when_sendto_raises() -> None:
     service.transport = BrokenTransport()
     processed = ProcessedPacket(payload=b"y")
 
-    service._send_output(make_packet(), processed)
+    service._send_output(processed, fallback_host="127.0.0.1")
 
     assert service.metrics.forwarding_errors == 1
 

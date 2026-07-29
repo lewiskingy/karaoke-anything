@@ -37,5 +37,8 @@ class AudioProcessor(ABC):
         raise NotImplementedError
 
     async def flush(self) -> AsyncIterator[ProcessedPacket]:
+        # `yield` in an unreachable branch makes this an async generator
+        # that produces nothing, matching the return type of overrides
+        # that do buffer output.
         if False:
             yield ProcessedPacket(payload=b"")

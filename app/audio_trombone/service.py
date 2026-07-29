@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 import logging
 import time
 from typing import Any
@@ -7,9 +7,81 @@ from typing import Any
 from audio_trombone.config import Settings
 from audio_trombone.models import MediaPacket, Metrics, ProcessedPacket
 from audio_trombone.processors import AudioProcessor, ProcessorRegistry
+from audio_trombone.processors.mdx23c_vocals import SUPPORTED_SEGMENTS
 from audio_trombone.transport import UdpIngressProtocol
 
 logger = logging.getLogger(__name__)
+
+# Single source of truth for the runtime-settings API: each group name maps
+# the JSON field a client sends to the `Settings` attribute it updates.
+# `runtime_settings()`, `update_runtime_settings()`, `restore_startup_settings()`,
+# and main.py's request-flattening all derive from this instead of repeating
+# the field list.
+RUNTIME_SETTING_GROUPS: dict[str, dict[str, str]] = {
+    "demucs": {
+        "model": "demucs_model",
+        "device": "demucs_device",
+        "segment_seconds": "demucs_segment_seconds",
+        "overlap": "demucs_overlap",
+        "shifts": "demucs_shifts",
+        "vocal_reduction": "demucs_vocal_reduction",
+    },
+    "convtasnet": {
+        "model_path": "convtasnet_model_path",
+        "device": "convtasnet_device",
+        "segment_seconds": "convtasnet_segment_seconds",
+        "vocal_reduction": "convtasnet_vocal_reduction",
+        "vocal_source_index": "convtasnet_vocal_source_index",
+        "accompaniment_source_index": "convtasnet_accompaniment_source_index",
+    },
+    "mdx23c": {
+        "device": "mdx23c_device",
+        "segment_seconds": "mdx23c_segment_seconds",
+        "overlap": "mdx23c_overlap",
+        "batch_size": "mdx23c_batch_size",
+        "vocal_reduction": "mdx23c_vocal_reduction",
+        "precision": "mdx23c_precision",
+    },
+    "centre_reduction": {
+        "reduction": "centre_reduction",
+    },
+}
+
+_ALL_SETTING_FIELDS: frozenset[str] = frozenset(
+    {"processor"}
+    | {attribute for group in RUNTIME_SETTING_GROUPS.values() for attribute in group.values()}
+)
+
+
+def _settings_snapshot(settings: Settings) -> dict[str, object]:
+    """The `runtime_settings()` shape for one `Settings` instance: `processor`
+    plus one dict per group, each mapping the group's JSON field names to
+    their current values."""
+    snapshot: dict[str, object] = {"processor": settings.processor}
+    for group_name, fields in RUNTIME_SETTING_GROUPS.items():
+        snapshot[group_name] = {
+            field_name: getattr(settings, attribute) for field_name, attribute in fields.items()
+        }
+    return snapshot
+
+
+@dataclass(frozen=True)
+class _LiveApplyRule:
+    """A single runtime setting that can be pushed onto the active processor
+    without restarting it, provided that processor is the one currently running."""
+
+    setting_key: str
+    processor_name: str
+    attribute: str
+    applies_from: str
+    log_message: str
+
+    def matches(self, key: str, processor: AudioProcessor) -> bool:
+        return (
+            key == self.setting_key
+            and processor.name == self.processor_name
+            and hasattr(processor, self.attribute)
+        )
 
 
 class TromboneService:
@@ -91,121 +163,25 @@ class TromboneService:
             await self.processor.reset()
 
     def runtime_settings(self) -> dict[str, object]:
-        return {
-            "processor": self.settings.processor,
-            "demucs": {
-                "model": self.settings.demucs_model,
-                "device": self.settings.demucs_device,
-                "segment_seconds": self.settings.demucs_segment_seconds,
-                "overlap": self.settings.demucs_overlap,
-                "shifts": self.settings.demucs_shifts,
-                "vocal_reduction": self.settings.demucs_vocal_reduction,
-            },
-            "convtasnet": {
-                "model_path": self.settings.convtasnet_model_path,
-                "device": self.settings.convtasnet_device,
-                "segment_seconds": self.settings.convtasnet_segment_seconds,
-                "vocal_reduction": self.settings.convtasnet_vocal_reduction,
-                "vocal_source_index": self.settings.convtasnet_vocal_source_index,
-                "accompaniment_source_index": self.settings.convtasnet_accompaniment_source_index,
-            },
-            "mdx23c": {
-                "device": self.settings.mdx23c_device,
-                "segment_seconds": self.settings.mdx23c_segment_seconds,
-                "overlap": self.settings.mdx23c_overlap,
-                "batch_size": self.settings.mdx23c_batch_size,
-                "vocal_reduction": self.settings.mdx23c_vocal_reduction,
-                "precision": self.settings.mdx23c_precision,
-                "reload_fields": ["device", "segment_seconds", "overlap", "batch_size", "precision"],
-            },
-            "centre_reduction": {
-                "reduction": self.settings.centre_reduction,
-            },
-            "startup_defaults": {
-                "processor": self.startup_settings.processor,
-                "demucs": {
-                    "model": self.startup_settings.demucs_model,
-                    "device": self.startup_settings.demucs_device,
-                    "segment_seconds": self.startup_settings.demucs_segment_seconds,
-                    "overlap": self.startup_settings.demucs_overlap,
-                    "shifts": self.startup_settings.demucs_shifts,
-                    "vocal_reduction": self.startup_settings.demucs_vocal_reduction,
-                },
-                "convtasnet": {
-                    "model_path": self.startup_settings.convtasnet_model_path,
-                    "device": self.startup_settings.convtasnet_device,
-                    "segment_seconds": self.startup_settings.convtasnet_segment_seconds,
-                    "vocal_reduction": self.startup_settings.convtasnet_vocal_reduction,
-                    "vocal_source_index": self.startup_settings.convtasnet_vocal_source_index,
-                    "accompaniment_source_index": self.startup_settings.convtasnet_accompaniment_source_index,
-                },
-                "mdx23c": {
-                    "device": self.startup_settings.mdx23c_device,
-                    "segment_seconds": self.startup_settings.mdx23c_segment_seconds,
-                    "overlap": self.startup_settings.mdx23c_overlap,
-                    "batch_size": self.startup_settings.mdx23c_batch_size,
-                    "vocal_reduction": self.startup_settings.mdx23c_vocal_reduction,
-                    "precision": self.startup_settings.mdx23c_precision,
-                },
-                "centre_reduction": {
-                    "reduction": self.startup_settings.centre_reduction,
-                },
-            },
-        }
+        snapshot = _settings_snapshot(self.settings)
+        snapshot["startup_defaults"] = _settings_snapshot(self.startup_settings)
+        return snapshot
 
     async def update_runtime_settings(self, updates: dict[str, object]) -> dict[str, object]:
-        allowed = {
-            "processor",
-            "demucs_model",
-            "demucs_device",
-            "demucs_segment_seconds",
-            "demucs_overlap",
-            "demucs_shifts",
-            "demucs_vocal_reduction",
-            "convtasnet_model_path",
-            "convtasnet_device",
-            "convtasnet_segment_seconds",
-            "convtasnet_vocal_reduction",
-            "convtasnet_vocal_source_index",
-            "convtasnet_accompaniment_source_index",
-            "centre_reduction",
-            "mdx23c_device", "mdx23c_segment_seconds", "mdx23c_overlap",
-            "mdx23c_batch_size", "mdx23c_vocal_reduction", "mdx23c_precision",
-        }
-        unknown = set(updates) - allowed
+        unknown = set(updates) - _ALL_SETTING_FIELDS
         if unknown:
             raise ValueError(f"Unknown runtime settings: {', '.join(sorted(unknown))}")
 
         candidate = replace(self.settings, **updates)
         self._validate_runtime_settings(candidate)
 
-        if self._can_apply_live(updates):
-            if "demucs_vocal_reduction" in updates:
-                self.processor.vocal_reduction = candidate.demucs_vocal_reduction  # type: ignore[attr-defined]
-                applies_from = "next segment"
-                logger.info(
-                    "Updated live Demucs vocal reduction to %.2f",
-                    candidate.demucs_vocal_reduction,
-                )
-            elif "convtasnet_vocal_reduction" in updates:
-                self.processor.vocal_reduction = candidate.convtasnet_vocal_reduction  # type: ignore[attr-defined]
-                applies_from = "next segment"
-                logger.info(
-                    "Updated live ConvTasNet vocal reduction to %.2f",
-                    candidate.convtasnet_vocal_reduction,
-                )
-            elif "mdx23c_vocal_reduction" in updates:
-                self.processor.vocal_reduction = candidate.mdx23c_vocal_reduction  # type: ignore[attr-defined]
-                applies_from = "next segment"
-            else:
-                self.processor.centre_reduction = candidate.centre_reduction  # type: ignore[attr-defined]
-                applies_from = "next packet"
-                logger.info(
-                    "Updated live centre reduction to %.2f",
-                    candidate.centre_reduction,
-                )
+        rule = self._find_live_apply_rule(updates)
+        if rule is not None:
+            new_value = getattr(candidate, rule.setting_key)
+            setattr(self.processor, rule.attribute, new_value)
+            logger.info(rule.log_message, new_value)
             self.settings = candidate
-            return {"processor_restarted": False, "applies_from": applies_from}
+            return {"processor_restarted": False, "applies_from": rule.applies_from}
 
         registry = ProcessorRegistry(candidate)
         replacement = registry.create(candidate.processor)
@@ -220,49 +196,53 @@ class TromboneService:
         logger.info("Runtime settings applied; processor reinitialised")
         return {"processor_restarted": True, "applies_from": "immediately"}
 
-    # (single settings key, processor it applies to, live-mutable attribute)
     _LIVE_APPLY_RULES = (
-        ("demucs_vocal_reduction", "htdemucs-vocals", "vocal_reduction"),
-        ("mdx23c_vocal_reduction", "mdx23c-vocals", "vocal_reduction"),
-        ("convtasnet_vocal_reduction", "convtasnet-lyrics-causal", "vocal_reduction"),
-        ("centre_reduction", "stereo-centre-reduction", "centre_reduction"),
+        _LiveApplyRule(
+            "demucs_vocal_reduction",
+            "htdemucs-vocals",
+            "vocal_reduction",
+            "next segment",
+            "Updated live Demucs vocal reduction to %.2f",
+        ),
+        _LiveApplyRule(
+            "mdx23c_vocal_reduction",
+            "mdx23c-vocals",
+            "vocal_reduction",
+            "next segment",
+            "Updated live MDX23C vocal reduction to %.2f",
+        ),
+        _LiveApplyRule(
+            "convtasnet_vocal_reduction",
+            "convtasnet-lyrics-causal",
+            "vocal_reduction",
+            "next segment",
+            "Updated live ConvTasNet vocal reduction to %.2f",
+        ),
+        _LiveApplyRule(
+            "centre_reduction",
+            "stereo-centre-reduction",
+            "centre_reduction",
+            "next packet",
+            "Updated live centre reduction to %.2f",
+        ),
     )
 
-    def _can_apply_live(self, updates: dict[str, object]) -> bool:
+    def _find_live_apply_rule(self, updates: dict[str, object]) -> "_LiveApplyRule | None":
         keys = set(updates)
         if len(keys) != 1:
-            return False
+            return None
         (key,) = keys
-        return any(
-            key == setting_key
-            and self.processor.name == processor_name
-            and hasattr(self.processor, attribute)
-            for setting_key, processor_name, attribute in self._LIVE_APPLY_RULES
-        )
+        for rule in self._LIVE_APPLY_RULES:
+            if rule.matches(key, self.processor):
+                return rule
+        return None
+
+    def _can_apply_live(self, updates: dict[str, object]) -> bool:
+        return self._find_live_apply_rule(updates) is not None
 
     async def restore_startup_settings(self) -> dict[str, object]:
         startup = asdict(self.startup_settings)
-        updates = {
-            key: startup[key]
-            for key in (
-                "processor",
-                "demucs_model",
-                "demucs_device",
-                "demucs_segment_seconds",
-                "demucs_overlap",
-                "demucs_shifts",
-                "demucs_vocal_reduction",
-                "convtasnet_model_path",
-                "convtasnet_device",
-                "convtasnet_segment_seconds",
-                "convtasnet_vocal_reduction",
-                "convtasnet_vocal_source_index",
-                "convtasnet_accompaniment_source_index",
-                "centre_reduction",
-                "mdx23c_device", "mdx23c_segment_seconds", "mdx23c_overlap",
-                "mdx23c_batch_size", "mdx23c_vocal_reduction", "mdx23c_precision",
-            )
-        }
+        updates = {key: startup[key] for key in _ALL_SETTING_FIELDS}
         return await self.update_runtime_settings(updates)
 
     @staticmethod
@@ -324,8 +304,9 @@ class TromboneService:
     def _validate_mdx23c_settings(settings: Settings) -> None:
         TromboneService._raise_first_failure((
             (
-                settings.mdx23c_segment_seconds in (0.25, 0.5, 0.75, 1.0, 1.5, 2.0),
-                "MDX23C segment_seconds must be one of 0.25, 0.5, 0.75, 1.0, 1.5, 2.0",
+                settings.mdx23c_segment_seconds in SUPPORTED_SEGMENTS,
+                "MDX23C segment_seconds must be one of "
+                f"{', '.join(str(value) for value in SUPPORTED_SEGMENTS)}",
             ),
             (0 <= settings.mdx23c_overlap < 0.5, "MDX23C overlap must be between 0.0 and less than 0.5"),
             (settings.mdx23c_batch_size == 1, "MDX23C batch_size must be 1"),
@@ -346,7 +327,7 @@ class TromboneService:
                 async with self._processor_lock:
                     async for output in self.processor.process(packet):
                         self.metrics.packets_emitted += 1
-                        self._send_output(packet, output)
+                        self._send_output(output, packet.sender_host)
                 self.metrics.packets_processed += 1
             except asyncio.CancelledError:
                 raise
@@ -361,7 +342,11 @@ class TromboneService:
             finally:
                 self.input_queue.task_done()
 
-    def _send_output(self, source_packet: MediaPacket, output: ProcessedPacket) -> None:
+    def _send_output(self, output: ProcessedPacket, fallback_host: str) -> None:
+        """Forward `output`, preferring its own destination, then the
+        configured return host, then `fallback_host` (the sender of the
+        input packet this output was produced from, or -- for flushed
+        output with no single input packet -- the last known sender)."""
         if self.transport is None:
             self.metrics.forwarding_errors += 1
             logger.error("Cannot forward packet: UDP transport is unavailable")
@@ -369,7 +354,7 @@ class TromboneService:
         destination_host = (
             output.destination_host
             or self.settings.return_host
-            or source_packet.sender_host
+            or fallback_host
         )
         destination_port = output.destination_port or self.settings.output_port
         try:
@@ -386,18 +371,12 @@ class TromboneService:
 
     async def _flush_processor(self) -> None:
         async for output in self.processor.flush():
-            sender_host = self.settings.return_host or self.metrics.last_sender_host
-            if sender_host is None:
+            fallback_host = self.settings.return_host or self.metrics.last_sender_host
+            if fallback_host is None:
                 logger.warning("Discarding flushed packet because no destination is known")
                 continue
-            synthetic_source = MediaPacket(
-                payload=b"",
-                sender_host=sender_host,
-                sender_port=self.metrics.last_sender_port or 0,
-                received_at=time.time(),
-            )
             self.metrics.packets_emitted += 1
-            self._send_output(synthetic_source, output)
+            self._send_output(output, fallback_host)
 
     def health(self) -> dict:
         return {
