@@ -6,11 +6,11 @@ import argparse
 from pathlib import Path
 
 EXPECTED_IMPORT = "from utils.model_utils import prefer_target_instrument\n"
-LOCAL_HELPER = '''def prefer_target_instrument(config):
+LOCAL_HELPER = """def prefer_target_instrument(config):
     if getattr(config.training, "target_instrument", None):
         return [config.training.target_instrument]
     return config.training.instruments
-'''
+"""
 
 
 def prepare(path: Path) -> None:

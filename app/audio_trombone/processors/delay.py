@@ -1,5 +1,5 @@
 import asyncio
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from audio_trombone.models import MediaPacket, ProcessedPacket
 from audio_trombone.processors.base import AudioProcessor, ProcessorCapabilities

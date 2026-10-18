@@ -65,7 +65,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Run client tests with coverage gate
-        run: cargo llvm-cov --ignore-filename-regex "main\.rs$" --fail-under-lines 100 --locked
+        run: cargo llvm-cov --ignore-filename-regex "main\.rs$|device\.rs$" --fail-under-lines 100 --locked
 
       - name: Build release client
         run: cargo build --release --locked

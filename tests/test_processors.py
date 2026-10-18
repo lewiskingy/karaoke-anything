@@ -1,5 +1,4 @@
 import pytest
-
 from audio_trombone.models import MediaPacket
 from audio_trombone.processors.delay import DelayPassthroughProcessor
 from audio_trombone.processors.null import NullProcessor
